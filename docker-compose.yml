@@ -1,0 +1,37 @@
+# Production: app + Caddy (automatic HTTPS from Let's Encrypt).
+#   cp .env.example .env   # fill in DOMAIN, PUBLIC_URL, ANTHROPIC_API_KEY
+#   docker compose up -d
+# Already have a reverse proxy / platform HTTPS? Run only the app:  docker compose up -d app
+services:
+  app:
+    image: ${IMAGE:-ghcr.io/capricarun/school-tracker:latest}
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      PORT: 3000
+      DATA_DIR: /data
+    volumes:
+      - school-data:/data
+    ports:
+      - "127.0.0.1:3000:3000"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - app
+    environment:
+      DOMAIN: ${DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  school-data:
+  caddy-data:
+  caddy-config:

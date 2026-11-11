@@ -1,0 +1,22 @@
+{
+  "name": "school-tracker",
+  "version": "1.0.0",
+  "description": "Turn school WhatsApp/app messages into a shared family tracker with push reminders",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "TZ=Asia/Kolkata node --test test/*.test.js",
+    "vapid": "web-push generate-vapid-keys"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "better-sqlite3": "^11.10.0",
+    "express": "^4.21.2",
+    "web-push": "^3.6.7"
+  }
+}
