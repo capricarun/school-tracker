@@ -1,0 +1,27 @@
+# Render Blueprint: New → Blueprint → pick this repo. Every push to main redeploys.
+services:
+  - type: web
+    name: school-tracker
+    runtime: docker
+    plan: starter            # paid plan: stays awake and allows a persistent disk
+    region: singapore        # closest Render region to India
+    branch: main
+    autoDeploy: true
+    healthCheckPath: /healthz
+    disk:
+      name: school-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: DATA_DIR
+        value: /data
+      - key: TZ
+        value: Asia/Kolkata
+      - key: ALLOW_SIGNUP
+        value: "true"        # set to false after your family is created
+      - key: VAPID_SUBJECT
+        value: mailto:admin@example.com
+      - key: CLAUDE_MODEL
+        value: claude-haiku-5-5
+      - key: ANTHROPIC_API_KEY
+        sync: false          # Render asks you for this value during setup

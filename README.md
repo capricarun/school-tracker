@@ -22,8 +22,8 @@ School Tracker turns those messages into a shared list for the family and **send
 
 | Piece | Choice | Why |
 |---|---|---|
-| API | Node 22 + Express | Small, no build step |
-| Storage | SQLite (better-sqlite3, WAL) | One file, easy backups, plenty for families |
+| API | Node 22.13+ (24 LTS recommended) + Express | Small, no build step |
+| Storage | SQLite (built into Node, `node:sqlite`, WAL) | One file, easy backups, plenty for families |
 | Reminders | In-process scheduler, idempotent `sent` table, grace window for downtime | No extra queue/cron service |
 | Push | Web Push + VAPID (keys auto-generated and stored in the DB) | Works on Android and installed iOS PWAs, no app store |
 | Extraction | Claude (`claude-haiku-5-5` by default) → rule parser fallback | Cheap and fast; still works with no key |
@@ -57,7 +57,9 @@ docker compose logs -f app
 
 Then open `https://school.yourdomain.com` on your phone, create the family, and **set `ALLOW_SIGNUP=false`** in `.env` and run `docker compose up -d` again, so nobody else can create families on your server.
 
-**Managed platforms (Render / Railway / Fly.io):** deploy the Dockerfile as a web service. Mount a persistent disk at `/data` and set the env vars from `.env.example`; the platform provides HTTPS, so Caddy isn't needed. Keep it to a **single instance** (SQLite + in-process scheduler) and make sure it doesn't sleep when idle, or reminders will be late.
+**Render (one-click from GitHub):** the repo includes a `render.yaml` Blueprint. In Render choose **New → Blueprint**, pick this repo, paste your `ANTHROPIC_API_KEY` when asked and click **Apply**. You get a fixed `https://school-tracker-xxxx.onrender.com` address, and every push to `main` redeploys automatically. It uses the paid Starter instance plus a 1 GB disk; the free instance sleeps after 15 minutes and loses its files, so reminders and data would not survive.
+
+**Other managed platforms (Railway / Fly.io):** deploy the Dockerfile as a web service. Mount a persistent disk at `/data` and set the env vars from `.env.example`; the platform provides HTTPS, so Caddy isn't needed. Keep it to a **single instance** (SQLite + in-process scheduler) and make sure it doesn't sleep when idle, or reminders will be late.
 
 **Build the image yourself** instead of pulling: `docker compose up -d --build`.
 

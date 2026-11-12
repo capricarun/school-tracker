@@ -11,11 +11,10 @@
     "vapid": "web-push generate-vapid-keys"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.13"
   },
   "license": "MIT",
   "dependencies": {
-    "better-sqlite3": "^11.10.0",
     "express": "^4.21.2",
     "web-push": "^3.6.7"
   }

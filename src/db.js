@@ -1,4 +1,4 @@
-import Database from 'better-sqlite3';
+import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -6,9 +6,20 @@ import { config } from './config.js';
 
 export function openDb(file = path.join(config.dataDir, 'school-tracker.db')) {
   if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true });
-  const db = new Database(file);
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
+  const db = new DatabaseSync(file);
+  db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
+  // Same shape as better-sqlite3's db.transaction(fn): returns a function that runs fn atomically.
+  db.transaction = (fn) => (...args) => {
+    db.exec('BEGIN');
+    try {
+      const out = fn(...args);
+      db.exec('COMMIT');
+      return out;
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  };
   db.exec(`
     CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS families (
