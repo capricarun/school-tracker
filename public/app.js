@@ -31,6 +31,7 @@ function dayLabel(d) {
   if (n > 1 && n < 7) return WDL[d.getDay()];
   return `${WD[d.getDay()]} ${d.getDate()} ${MON[d.getMonth()]}`;
 }
+const isTextField = (el) => !!el && (el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && !['button', 'checkbox', 'radio', 'file', 'hidden'].includes(el.type)));
 const initial = (name) => esc((name || '?').trim().charAt(0).toUpperCase());
 
 const ICON = {
@@ -357,7 +358,7 @@ function draftRems(d) {
 function attachmentsSection(it) {
   const atts = it.attachments || [];
   return `<section class="card stack" id="attachments" style="gap:12px">
-    <div class="row between" style="align-items:baseline"><h2>Documents &amp; notes</h2><span class="small">${atts.length ? atts.length + ' saved' : 'Shared with your family'}</span></div>
+    <div class="row between wrap" style="align-items:baseline;row-gap:2px"><h2>Documents &amp; notes</h2><span class="small">${atts.length ? atts.length + ' saved' : 'Shared with your family'}</span></div>
     ${atts.length ? `<div class="att-list">${atts.map((a) => {
       const thumb = isImage(a) && blobUrls.has(a.id)
         ? `<img src="${blobUrls.get(a.id)}" alt="">`
@@ -427,7 +428,7 @@ function draftCard(d, i) {
     ${S.data.children.length ? `<div class="field"><span class="label">For</span><div class="chips" role="group" aria-label="Child">${S.data.children
       .map((c) => `<button class="chip sm" data-act="draft-set" data-i="${i}" data-k="childId" data-v="${c.id}" aria-pressed="${d.childId === c.id}">${esc(c.name)}</button>`)
       .join('')}</div></div>` : ''}
-    <div class="grid2">
+    <div class="grid2 dt">
       <div class="field"><label for="d${i}">Date</label><input type="date" id="d${i}" data-bind="draft.${i}.date" data-rerender value="${esc(d.date)}"></div>
       <div class="field"><label for="h${i}">Time (optional)</label><input type="time" id="h${i}" data-bind="draft.${i}.time" data-rerender value="${esc(d.time)}"></div>
     </div>
@@ -485,7 +486,7 @@ function itemScreen() {
     ${S.data.children.length ? `<div class="field"><span class="label">For</span><div class="chips" role="group" aria-label="Child">${S.data.children
       .map((c) => `<button class="chip sm" data-act="item-set" data-k="childId" data-v="${c.id}" aria-pressed="${it.childId === c.id}">${esc(c.name)}</button>`)
       .join('')}</div></div>` : ''}
-    <div class="grid2">
+    <div class="grid2 dt">
       <div class="field"><label for="it-date">Date</label><input type="date" id="it-date" data-save="date" value="${esc(it.date)}"></div>
       <div class="field"><label for="it-time">Time</label><input type="time" id="it-time" data-save="time" value="${esc(it.time)}"></div>
     </div>
@@ -499,11 +500,11 @@ function itemScreen() {
         <button class="btn small danger" data-act="del-custom" data-k="${esc(c.key)}" aria-label="Remove custom reminder ${esc(fmtWhen(c.at))}">Remove</button></div>`).join('')}
       ${customs.length < MAX_CUSTOM ? `<div class="stack" style="padding:12px 0 14px;gap:8px">
         <label for="custom-rem">Add a reminder at a date and time you choose</label>
-        <div class="row"><input type="datetime-local" id="custom-rem" data-bind="customRem" value="${esc(S.customRem)}" class="grow">
-        <button class="btn small primary" data-act="add-custom">Add</button></div></div>` : ''}
+        <div class="rem-add"><input type="datetime-local" id="custom-rem" data-bind="customRem" value="${esc(S.customRem)}">
+        <button class="btn small primary" data-act="add-custom">Add reminder</button></div></div>` : ''}
     </section>
     ${attachmentsSection(it)}
-    <div class="row">
+    <div class="row wrap actions">
       <button class="btn grow" data-act="snooze">Remind me in 1 hr</button>
       ${it.done
         ? `<button class="btn grow" data-act="toggle-done" data-id="${it.id}">Done by ${esc(it.doneBy || '')} · Undo</button>`
@@ -609,7 +610,7 @@ function familyScreen() {
         <span class="small" style="display:block">${S.data.items.filter((i) => i.childId === c.id && !i.done).length} open</span></span>
         <button class="btn small danger" data-act="del-child" data-id="${c.id}" aria-label="Remove ${esc(c.name)}">Remove</button></div>`).join('')}
       <div class="card stack">
-        <div class="grid2">
+        <div class="grid2 pair">
           <div class="field"><label for="ac-name">Child's name</label><input type="text" id="ac-name" data-bind="addChild.name" value="${esc(S.addChild.name)}"></div>
           <div class="field"><label for="ac-grade">Class</label><input type="text" id="ac-grade" data-bind="addChild.grade" value="${esc(S.addChild.grade)}" placeholder="e.g. Grade 4 · 4B"></div>
         </div>
@@ -649,7 +650,7 @@ function onboardScreen() {
     <div class="field"><label for="ob-me">Your name</label><input type="text" id="ob-me" data-bind="onboard.memberName" value="${esc(o.memberName)}" autocomplete="given-name"></div>
     <div class="field"><label for="ob-fam">Family name</label><input type="text" id="ob-fam" data-bind="onboard.familyName" value="${esc(o.familyName)}" placeholder="e.g. The Sharmas"></div>
     <section class="stack"><span class="label">Children</span>
-      ${o.kids.map((k, i) => `<div class="grid2">
+      ${o.kids.map((k, i) => `<div class="grid2 pair">
         <input type="text" aria-label="Child ${i + 1} name" placeholder="Name" data-bind="onboard.kids.${i}.name" value="${esc(k.name)}">
         <input type="text" aria-label="Child ${i + 1} class" placeholder="Class, e.g. Grade 4 · 4B" data-bind="onboard.kids.${i}.grade" value="${esc(k.grade)}">
       </div>`).join('')}
@@ -678,6 +679,8 @@ function render() {
   if (S.toast) html += `<div class="toast" role="status">${esc(S.toast)}</div>`;
   $app.innerHTML = html;
   document.body.style.overflow = S.viewer ? 'hidden' : '';
+  // Re-rendering can remove the focused field without a focusout event; resync the keyboard state.
+  document.body.classList.toggle('typing', isTextField(document.activeElement) && matchMedia('(pointer: coarse)').matches);
   loadThumbs();
 
   if (focusId) {
@@ -1096,6 +1099,9 @@ document.addEventListener('paste', (e) => {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && S.viewer) { S.viewer = null; render(); }
 });
+// On phones the keyboard pushes fixed bars up over the field being typed in, so hide them while typing.
+document.addEventListener('focusin', (e) => { if (isTextField(e.target) && matchMedia('(pointer: coarse)').matches) document.body.classList.add('typing'); });
+document.addEventListener('focusout', () => setTimeout(() => { if (!isTextField(document.activeElement)) document.body.classList.remove('typing'); }, 50));
 document.addEventListener('focusin', (e) => { if (e.target.dataset.select !== undefined) e.target.select(); });
 navigator.serviceWorker?.addEventListener('message', (e) => { if (e.data?.type === 'refresh') refresh(); });
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refresh(); });

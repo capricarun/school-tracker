@@ -460,3 +460,54 @@ footer.viewer-bar { padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
 }
 .diag-dot.ok { background: var(--accent-soft); color: var(--accent-soft-ink); }
 .diag-dot.bad { background: #fde7df; color: #9a2c12; }
+
+/* ---------- small-screen fit (iPhone SE … Pro Max) ---------- */
+/* Grid/flex children default to min-width:auto, which lets wide inputs push past their cell. */
+.grid2 > *, .grid3 > *, .field, .row > *, .stack > * { min-width: 0; }
+input, textarea, select { max-width: 100%; min-width: 0; }
+/* iOS Safari draws date/time inputs with their own intrinsic width and centred text; make them behave like text boxes. */
+input[type='date'], input[type='time'], input[type='datetime-local'] {
+  -webkit-appearance: none;
+  appearance: none;
+  display: block;
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  line-height: 1.2;
+  padding: 10px 12px;
+  text-align: left;
+  color: var(--ink);
+}
+input::-webkit-date-and-time-value { text-align: left; margin: 0; }
+input::-webkit-datetime-edit { padding: 0; }
+input[type='text'] { text-overflow: ellipsis; }
+
+/* Date + time side by side only when there is room for both values. */
+@media (max-width: 440px) {
+  .grid2.dt { grid-template-columns: minmax(0, 1fr); }
+}
+/* Two text boxes per row (child name + class) stack on very narrow phones. */
+@media (max-width: 360px) {
+  .grid2.pair { grid-template-columns: minmax(0, 1fr); }
+  .grid3 { gap: 6px; }
+  .stat { padding: 10px 8px; }
+  .stat strong { font-size: 22px; }
+}
+.rem-add { display: flex; gap: 8px; flex-wrap: wrap; }
+.rem-add input { flex: 1 1 200px; }
+.rem-add .btn { flex: 1 0 auto; min-height: 44px; }
+.actions > .btn { flex: 1 1 140px; }
+.chips { row-gap: 8px; }
+
+@media (max-width: 380px) {
+  .screen { padding-left: 16px; padding-right: 16px; gap: 16px; }
+  .card { padding: 14px; }
+  .card.list { padding: 2px 14px; }
+  h1, .h1 { font-size: 25px; }
+}
+
+/* Keyboard open: hide floating bars so they can't cover the field being typed in. */
+body.typing nav.bottom,
+body.typing .savebar,
+body.typing .toast { display: none; }
+body.typing .screen { padding-bottom: 24px; }
