@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test": "TZ=Asia/Kolkata node --test test/*.test.js",
+    "test": "TZ=Asia/Kolkata node --test test/*.test.js && TZ=Asia/Kolkata TEST_DB=libsql node --test test/api.test.js",
     "vapid": "web-push generate-vapid-keys"
   },
   "engines": {
@@ -15,6 +15,7 @@
   },
   "license": "MIT",
   "dependencies": {
+    "@libsql/client": "^0.18.0",
     "express": "^4.21.2",
     "web-push": "^3.6.7"
   }

@@ -1,77 +1,96 @@
-import { DatabaseSync } from 'node:sqlite';
+// Storage adapter with one async API and two backends:
+//  - Turso / libSQL (hosted SQLite) when TURSO_DATABASE_URL is set — use this on hosts
+//    without a persistent disk, e.g. Render's free plan.
+//  - Node's built-in SQLite file (node:sqlite) otherwise — local dev, VMs, Docker with a volume.
+// All SQL uses positional "?" parameters so it runs unchanged on both.
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { config } from './config.js';
 
-export function openDb(file = path.join(config.dataDir, 'school-tracker.db')) {
+const SCHEMA = `
+  CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS families (id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS members (
+    id TEXT PRIMARY KEY, family_id TEXT NOT NULL,
+    name TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'member',
+    notify INTEGER NOT NULL DEFAULT 1, tell_done INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS devices (token_hash TEXT PRIMARY KEY, member_id TEXT NOT NULL, created_at TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS invites (
+    code TEXT PRIMARY KEY, family_id TEXT NOT NULL, created_by TEXT NOT NULL, member_id TEXT,
+    created_at TEXT NOT NULL, expires_at TEXT NOT NULL, used_at TEXT);
+  CREATE TABLE IF NOT EXISTS children (
+    id TEXT PRIMARY KEY, family_id TEXT NOT NULL,
+    name TEXT NOT NULL, grade TEXT NOT NULL DEFAULT '', color TEXT NOT NULL DEFAULT '#0E6B5E',
+    created_at TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS items (
+    id TEXT PRIMARY KEY, family_id TEXT NOT NULL, child_id TEXT,
+    type TEXT NOT NULL, title TEXT NOT NULL,
+    date TEXT NOT NULL, time TEXT NOT NULL DEFAULT '', location TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT '', msg TEXT NOT NULL DEFAULT '', rem TEXT NOT NULL DEFAULT '[]',
+    done INTEGER NOT NULL DEFAULT 0, done_by TEXT, done_at TEXT,
+    created_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+  CREATE INDEX IF NOT EXISTS items_family ON items(family_id, done, date);
+  CREATE TABLE IF NOT EXISTS push_subs (endpoint TEXT PRIMARY KEY, member_id TEXT NOT NULL, sub TEXT NOT NULL, created_at TEXT NOT NULL);
+  CREATE INDEX IF NOT EXISTS push_subs_member ON push_subs(member_id);
+  CREATE TABLE IF NOT EXISTS sent (
+    item_id TEXT NOT NULL, rem_key TEXT NOT NULL, member_id TEXT NOT NULL, sent_at TEXT NOT NULL,
+    PRIMARY KEY (item_id, rem_key, member_id));
+  CREATE TABLE IF NOT EXISTS snoozes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, item_id TEXT NOT NULL, member_id TEXT NOT NULL,
+    at TEXT NOT NULL, sent INTEGER NOT NULL DEFAULT 0);
+  CREATE TABLE IF NOT EXISTS activity (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, family_id TEXT NOT NULL, member_id TEXT, text TEXT NOT NULL, at TEXT NOT NULL);
+`;
+
+const plain = (row) => (row ? { ...row } : undefined);
+
+async function nodeSqlite(file) {
+  const { DatabaseSync } = await import('node:sqlite');
   if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true });
-  const db = new DatabaseSync(file);
-  db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
-  // Same shape as better-sqlite3's db.transaction(fn): returns a function that runs fn atomically.
-  db.transaction = (fn) => (...args) => {
-    db.exec('BEGIN');
-    try {
-      const out = fn(...args);
-      db.exec('COMMIT');
-      return out;
-    } catch (err) {
-      db.exec('ROLLBACK');
-      throw err;
-    }
+  const raw = new DatabaseSync(file);
+  raw.exec('PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;');
+  return {
+    kind: 'sqlite-file',
+    async get(sql, args = []) { return plain(raw.prepare(sql).get(...args)); },
+    async all(sql, args = []) { return raw.prepare(sql).all(...args).map(plain); },
+    async run(sql, args = []) { const r = raw.prepare(sql).run(...args); return { changes: Number(r.changes) }; },
+    async exec(sql) { raw.exec(sql); },
+    /** Run [sql, args] pairs atomically. */
+    async batch(stmts) {
+      raw.exec('BEGIN');
+      try {
+        for (const [sql, args = []] of stmts) raw.prepare(sql).run(...args);
+        raw.exec('COMMIT');
+      } catch (err) {
+        raw.exec('ROLLBACK');
+        throw err;
+      }
+    },
+    close() { raw.close(); },
   };
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS families (
-      id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS members (
-      id TEXT PRIMARY KEY,
-      family_id TEXT NOT NULL REFERENCES families(id) ON DELETE CASCADE,
-      name TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'member',
-      notify INTEGER NOT NULL DEFAULT 1, tell_done INTEGER NOT NULL DEFAULT 1,
-      created_at TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS devices (
-      token_hash TEXT PRIMARY KEY,
-      member_id TEXT NOT NULL REFERENCES members(id) ON DELETE CASCADE,
-      created_at TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS invites (
-      code TEXT PRIMARY KEY,
-      family_id TEXT NOT NULL REFERENCES families(id) ON DELETE CASCADE,
-      created_by TEXT NOT NULL, member_id TEXT,
-      created_at TEXT NOT NULL, expires_at TEXT NOT NULL, used_at TEXT);
-    CREATE TABLE IF NOT EXISTS children (
-      id TEXT PRIMARY KEY,
-      family_id TEXT NOT NULL REFERENCES families(id) ON DELETE CASCADE,
-      name TEXT NOT NULL, grade TEXT NOT NULL DEFAULT '', color TEXT NOT NULL DEFAULT '#0E6B5E',
-      created_at TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS items (
-      id TEXT PRIMARY KEY,
-      family_id TEXT NOT NULL REFERENCES families(id) ON DELETE CASCADE,
-      child_id TEXT REFERENCES children(id) ON DELETE SET NULL,
-      type TEXT NOT NULL, title TEXT NOT NULL,
-      date TEXT NOT NULL, time TEXT NOT NULL DEFAULT '', location TEXT NOT NULL DEFAULT '',
-      source TEXT NOT NULL DEFAULT '', msg TEXT NOT NULL DEFAULT '',
-      rem TEXT NOT NULL DEFAULT '[]',
-      done INTEGER NOT NULL DEFAULT 0, done_by TEXT, done_at TEXT,
-      created_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-    CREATE INDEX IF NOT EXISTS items_family ON items(family_id, done, date);
-    CREATE TABLE IF NOT EXISTS push_subs (
-      endpoint TEXT PRIMARY KEY,
-      member_id TEXT NOT NULL REFERENCES members(id) ON DELETE CASCADE,
-      sub TEXT NOT NULL, created_at TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS sent (
-      item_id TEXT NOT NULL, rem_key TEXT NOT NULL, member_id TEXT NOT NULL, sent_at TEXT NOT NULL,
-      PRIMARY KEY (item_id, rem_key, member_id));
-    CREATE TABLE IF NOT EXISTS snoozes (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
-      member_id TEXT NOT NULL REFERENCES members(id) ON DELETE CASCADE,
-      at TEXT NOT NULL, sent INTEGER NOT NULL DEFAULT 0);
-    CREATE TABLE IF NOT EXISTS activity (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      family_id TEXT NOT NULL REFERENCES families(id) ON DELETE CASCADE,
-      member_id TEXT, text TEXT NOT NULL, at TEXT NOT NULL);
-  `);
+}
+
+async function libsql(url, authToken) {
+  // Remote URLs use the pure-HTTP client (no native module); file: URLs (tests) use the full client.
+  const mod = /^file:/.test(url) ? await import('@libsql/client') : await import('@libsql/client/web');
+  const client = mod.createClient({ url, authToken: authToken || undefined });
+  const rows = (rs) => rs.rows.map((r) => Object.fromEntries(rs.columns.map((c, i) => [c, r[i]])));
+  return {
+    kind: 'libsql',
+    async get(sql, args = []) { return rows(await client.execute({ sql, args }))[0]; },
+    async all(sql, args = []) { return rows(await client.execute({ sql, args })); },
+    async run(sql, args = []) { const r = await client.execute({ sql, args }); return { changes: r.rowsAffected }; },
+    async exec(sql) { await client.executeMultiple(sql); },
+    async batch(stmts) { await client.batch(stmts.map(([sql, args = []]) => ({ sql, args })), 'write'); },
+    close() { client.close(); },
+  };
+}
+
+export async function openDb({ url = config.databaseUrl, authToken = config.databaseToken, file } = {}) {
+  const db = url ? await libsql(url, authToken) : await nodeSqlite(file || path.join(config.dataDir, 'school-tracker.db'));
+  await db.exec(SCHEMA);
   return db;
 }
 
@@ -80,11 +99,11 @@ export const newToken = () => crypto.randomBytes(32).toString('base64url');
 export const hashToken = (t) => crypto.createHash('sha256').update(String(t)).digest('hex');
 export const nowIso = () => new Date().toISOString();
 
-export function getSetting(db, key) {
-  return db.prepare('SELECT value FROM settings WHERE key = ?').get(key)?.value ?? null;
+export async function getSetting(db, key) {
+  return (await db.get('SELECT value FROM settings WHERE key = ?', [key]))?.value ?? null;
 }
-export function setSetting(db, key, value) {
-  db.prepare('INSERT INTO settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, value);
+export async function setSetting(db, key, value) {
+  await db.run('INSERT INTO settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', [key, value]);
 }
 
 export function rowToItem(r) {

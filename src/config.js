@@ -2,6 +2,9 @@
 export const config = {
   port: Number(process.env.PORT || 3000),
   dataDir: process.env.DATA_DIR || './data',
+  // Hosted SQLite (Turso). When set, DATA_DIR is not used — needed on hosts without a disk.
+  databaseUrl: process.env.TURSO_DATABASE_URL || '',
+  databaseToken: process.env.TURSO_AUTH_TOKEN || '',
   publicUrl: (process.env.PUBLIC_URL || 'http://localhost:3000').replace(/\/$/, ''),
   anthropicKey: process.env.ANTHROPIC_API_KEY || '',
   claudeModel: process.env.CLAUDE_MODEL || 'claude-haiku-5-5',

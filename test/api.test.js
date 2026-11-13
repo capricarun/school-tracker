@@ -1,4 +1,6 @@
 import { test, before, after } from 'node:test';
+import os from 'node:os';
+import path from 'node:path';
 import assert from 'node:assert/strict';
 import { openDb } from '../src/db.js';
 import { initPush } from '../src/push.js';
@@ -7,13 +9,16 @@ import { dueReminders, runTick } from '../src/scheduler.js';
 
 let server, base, db;
 before(async () => {
-  db = openDb(':memory:');
-  initPush(db);
+  // TEST_DB=libsql runs the same suite against the Turso/libSQL backend (local file).
+  db = process.env.TEST_DB === 'libsql'
+    ? await openDb({ url: 'file:' + path.join(os.tmpdir(), `st-test-${process.pid}.db`) })
+    : await openDb({ url: '', file: ':memory:' });
+  await initPush(db);
   server = createApp(db).listen(0);
   await new Promise((r) => server.once('listening', r));
   base = `http://127.0.0.1:${server.address().port}`;
 });
-after(() => server.close());
+after(() => { server.close(); db.close(); });
 
 async function call(path, { token, method = 'GET', body } = {}) {
   const res = await fetch(base + path, {
@@ -69,16 +74,16 @@ test('family flow: create, invite partner, extract, save, done, reminders', asyn
   // The evening-before reminder becomes due at 19:00 today for both parents
   const [y, m, d] = tomorrow.split('-').map(Number);
   const eve = new Date(y, m - 1, d - 1, 19, 1);
-  db.prepare('UPDATE items SET created_at = ? WHERE id = ?').run(new Date(eve.getTime() - 3 * 3600e3).toISOString(), id);
-  const due = dueReminders(db, eve).filter((x) => x.item.id === id);
+  await db.run('UPDATE items SET created_at = ? WHERE id = ?', [new Date(eve.getTime() - 3 * 3600e3).toISOString(), id]);
+  const due = (await dueReminders(db, eve)).filter((x) => x.item.id === id);
   assert.equal(due.length, 2);
   await runTick(db, eve);
-  assert.equal(dueReminders(db, eve).filter((x) => x.item.id === id).length, 0, 'not sent twice');
+  assert.equal((await dueReminders(db, eve)).filter((x) => x.item.id === id).length, 0, 'not sent twice');
 
   // Done stops reminders
   await call(`/api/items/${id}/done`, { method: 'POST', token: tokA, body: { done: true } });
   const morning = new Date(y, m - 1, d, 7, 5);
-  assert.equal(dueReminders(db, morning).filter((x) => x.item.id === id).length, 0);
+  assert.equal((await dueReminders(db, morning)).filter((x) => x.item.id === id).length, 0);
 
   // Other families can't touch it
   const c = await call('/api/family', { method: 'POST', body: { memberName: 'Eve' } });

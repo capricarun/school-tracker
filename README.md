@@ -23,7 +23,7 @@ School Tracker turns those messages into a shared list for the family and **send
 | Piece | Choice | Why |
 |---|---|---|
 | API | Node 22.13+ (24 LTS recommended) + Express | Small, no build step |
-| Storage | SQLite (built into Node, `node:sqlite`, WAL) | One file, easy backups, plenty for families |
+| Storage | SQLite: built-in `node:sqlite` file, or Turso (hosted libSQL) when `TURSO_DATABASE_URL` is set | One file, easy backups, plenty for families |
 | Reminders | In-process scheduler, idempotent `sent` table, grace window for downtime | No extra queue/cron service |
 | Push | Web Push + VAPID (keys auto-generated and stored in the DB) | Works on Android and installed iOS PWAs, no app store |
 | Extraction | Claude (`claude-haiku-5-5` by default) → rule parser fallback | Cheap and fast; still works with no key |
@@ -57,7 +57,17 @@ docker compose logs -f app
 
 Then open `https://school.yourdomain.com` on your phone, create the family, and **set `ALLOW_SIGNUP=false`** in `.env` and run `docker compose up -d` again, so nobody else can create families on your server.
 
-**Render (one-click from GitHub):** the repo includes a `render.yaml` Blueprint. In Render choose **New → Blueprint**, pick this repo, paste your `ANTHROPIC_API_KEY` when asked and click **Apply**. You get a fixed `https://school-tracker-xxxx.onrender.com` address, and every push to `main` redeploys automatically. It uses the paid Starter instance plus a 1 GB disk; the free instance sleeps after 15 minutes and loses its files, so reminders and data would not survive.
+### Render free (no cost, no server to manage)
+
+Render's free plan has no disk and sleeps after 15 idle minutes, so this setup adds two free services:
+
+1. **Database: Turso** (hosted SQLite, free plan, no card). Sign up at turso.tech with GitHub → **Create database** (pick the region closest to you, e.g. Mumbai if offered) → copy the **database URL** (`libsql://…turso.io`) and create a **token**.
+2. **Render:** sign in with GitHub → **New → Blueprint** → pick this repo. `render.yaml` sets up the free web service. Paste `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN` and, optionally, `ANTHROPIC_API_KEY` → **Apply**. You get `https://school-tracker-xxxx.onrender.com`; every push to `main` redeploys.
+3. **Keep it awake:** at **cron-job.org** or **UptimeRobot** (both free), add a monitor that opens `https://school-tracker-xxxx.onrender.com/healthz` **every 10 minutes**. This keeps the reminder scheduler running. One always-on free service fits in Render's 750 free hours a month.
+
+Limits to know: free tiers can change; if the monitor misses a ping the app sleeps and reminders that fell due are sent as soon as it wakes (up to 3 hours late, `REMINDER_GRACE_MINUTES`). A deploy or restart takes about a minute, during which the app is unavailable.
+
+**Render paid (simplest, ~$7/month):** change `plan: free` to `plan: starter` in `render.yaml`. You can then drop Turso and add a disk (`disk: {name: data, mountPath: /data, sizeGB: 1}`) and skip the uptime monitor.
 
 **Other managed platforms (Railway / Fly.io):** deploy the Dockerfile as a web service. Mount a persistent disk at `/data` and set the env vars from `.env.example`; the platform provides HTTPS, so Caddy isn't needed. Keep it to a **single instance** (SQLite + in-process scheduler) and make sure it doesn't sleep when idle, or reminders will be late.
 

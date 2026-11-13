@@ -1,20 +1,17 @@
-# Render Blueprint: New → Blueprint → pick this repo. Every push to main redeploys.
+# Render Blueprint (free plan): New → Blueprint → pick this repo. Every push to main redeploys.
+# The free plan has no disk, so data lives in Turso (free hosted SQLite).
+# It also sleeps after 15 idle minutes: point a free uptime monitor at /healthz every 10 minutes
+# (see README → "Render free") so reminders go out on time.
 services:
   - type: web
     name: school-tracker
     runtime: docker
-    plan: starter            # paid plan: stays awake and allows a persistent disk
+    plan: free
     region: singapore        # closest Render region to India
     branch: main
     autoDeploy: true
     healthCheckPath: /healthz
-    disk:
-      name: school-data
-      mountPath: /data
-      sizeGB: 1
     envVars:
-      - key: DATA_DIR
-        value: /data
       - key: TZ
         value: Asia/Kolkata
       - key: ALLOW_SIGNUP
@@ -23,5 +20,9 @@ services:
         value: mailto:admin@example.com
       - key: CLAUDE_MODEL
         value: claude-haiku-5-5
+      - key: TURSO_DATABASE_URL
+        sync: false          # libsql://<db>-<you>.turso.io — Render asks during setup
+      - key: TURSO_AUTH_TOKEN
+        sync: false
       - key: ANTHROPIC_API_KEY
-        sync: false          # Render asks you for this value during setup
+        sync: false          # optional; leave empty for the built-in date reader

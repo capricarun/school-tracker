@@ -7,11 +7,11 @@ const { initPush } = await import('./push.js');
 const { createApp } = await import('./app.js');
 const { startScheduler } = await import('./scheduler.js');
 
-const db = openDb();
-initPush(db);
+const db = await openDb();
+await initPush(db);
 const app = createApp(db);
 const server = app.listen(config.port, () => {
-  console.log(`School Tracker on :${config.port} (TZ ${process.env.TZ}, AI ${config.anthropicKey ? config.claudeModel : 'off — rule parser'})`);
+  console.log(`School Tracker on :${config.port} (TZ ${process.env.TZ}, AI ${config.anthropicKey ? config.claudeModel : 'off — rule parser'}, DB ${db.kind})`);
 });
 const timer = startScheduler(db);
 
