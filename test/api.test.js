@@ -259,3 +259,22 @@ test('Shortcut form upload: text + photo are saved together; photo-only share; l
   assert.equal(photo.noDate, true);
   assert.equal(photo.attachments.length, 1);
 });
+
+test('share log records what each Shortcut share delivered', async () => {
+  const a = await call('/api/family', { method: 'POST', body: { memberName: 'L' } });
+  const tok = a.body.token;
+  const key = (await call('/api/shortcut-key', { method: 'POST', token: tok })).body.key;
+  const jpeg = Buffer.from('ffd8ffe000104a46494600010100000100010000ffd9', 'hex');
+  const fd = new FormData();
+  fd.append('text', 'Dear Parents, kindly bring the craft kit.');
+  fd.append('photo', new Blob([jpeg], { type: 'application/octet-stream' }), 'image');
+  await fetch(`${base}/api/quick-add`, { method: 'POST', headers: { authorization: 'Bearer ' + key }, body: fd });
+  await call('/api/quick-add', { method: 'POST', token: key, body: { text: 'Dear Parents, kindly bring the craft kit.' } });
+  const log = (await call('/api/shares', { token: tok })).body;
+  assert.equal(log.length, 2);
+  assert.equal(log[1].added, 1);
+  assert.deepEqual(log[1].files, [{ name: 'image.jpg', type: 'image/jpeg', size: jpeg.length }]); // type sniffed from bytes
+  assert.equal(log[0].added, 0);
+  assert.match(log[0].message, /^Already in School Tracker: "Bring the craft kit"/);
+  assert.equal(log[0].matchedTitle, 'Bring the craft kit');
+});

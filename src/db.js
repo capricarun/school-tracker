@@ -51,6 +51,10 @@ const SCHEMA = `
   CREATE TABLE IF NOT EXISTS chat_seen (
     family_id TEXT NOT NULL, msg_id TEXT NOT NULL, chat TEXT NOT NULL DEFAULT '', seen_at TEXT NOT NULL,
     PRIMARY KEY (family_id, msg_id));
+  CREATE TABLE IF NOT EXISTS share_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, family_id TEXT NOT NULL, member_id TEXT NOT NULL, at TEXT NOT NULL,
+    content_type TEXT NOT NULL DEFAULT '', fields TEXT NOT NULL DEFAULT '', text TEXT NOT NULL DEFAULT '',
+    files TEXT NOT NULL DEFAULT '[]', added INTEGER NOT NULL DEFAULT 0, matched_id TEXT, message TEXT NOT NULL DEFAULT '');
   CREATE TABLE IF NOT EXISTS activity (
     id INTEGER PRIMARY KEY AUTOINCREMENT, family_id TEXT NOT NULL, member_id TEXT, text TEXT NOT NULL, at TEXT NOT NULL);
 `;

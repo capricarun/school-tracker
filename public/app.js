@@ -88,6 +88,7 @@ const S = {
   importInfo: null, // { chatName, ids, newMessages, alreadySeen } while reviewing an import
   shortcut: null, // { key, url } right after creating an iPhone Shortcut key (shown once)
   shortcutOpen: false,
+  shares: null, // recent Shortcut shares (what arrived, what happened)
 };
 const blobUrls = new Map(); // attachment id -> object URL (thumbnails + viewer)
 const blobData = new Map(); // attachment id -> Blob (for Share)
@@ -669,6 +670,32 @@ function shareCard() {
   </section>`;
 }
 
+function sharesCard() {
+  const list = S.shares;
+  const body = !list
+    ? '<p class="small" style="margin:0">See exactly what each share from WhatsApp delivered: the text, any photos, and what was added.</p>'
+    : !list.length
+      ? '<p class="small" style="margin:0">No shares yet. Share a WhatsApp message to School Tracker, then tap Refresh.</p>'
+      : list.map((r) => {
+          const photos = r.files.length
+            ? r.files.map((f) => `${esc(f.name)} (${esc(f.type.split('/')[1] || f.type)}, ${fmtSize(f.size)})`).join(', ')
+            : '<b style="color:var(--danger)">no photo or file received</b>';
+          return `<div class="share-row">
+            <div class="row between" style="align-items:baseline"><b style="font-size:14px">${r.added ? `Added ${r.added}` : 'Nothing added'}</b>
+              <span class="small">${esc(r.who || '')} · ${esc(dayLabel(new Date(r.at)))} ${esc(fmtClock(new Date(r.at)))}</span></div>
+            <p class="small" style="margin:4px 0 0">${esc(r.message)}</p>
+            <p class="small" style="margin:6px 0 0"><b>Text received:</b> ${r.text ? '“' + esc(r.text.slice(0, 140)) + (r.text.length > 140 ? '…' : '') + '”' : '<b style="color:var(--danger)">none</b>'}</p>
+            <p class="small" style="margin:2px 0 0"><b>Files received:</b> ${photos}</p>
+            <p class="small" style="margin:2px 0 0;opacity:.8">Sent as ${esc(r.contentType || '?')}${r.fields ? ' · ' + esc(r.fields) : ''}</p>
+            ${r.matchedId ? `<button class="btn small" style="margin-top:8px" data-act="open" data-id="${esc(r.matchedId)}">${r.added ? 'Open item' : 'Open matching item'}${r.matchedTitle ? ': ' + esc(r.matchedTitle.slice(0, 40)) : ''}</button>` : ''}
+          </div>`;
+        }).join('');
+  return `<section class="card stack" style="gap:12px">
+    <div class="row between"><h2>Recent shares</h2><button class="btn small" data-act="load-shares">${list ? 'Refresh' : 'Show'}</button></div>
+    ${body}
+  </section>`;
+}
+
 function familyScreen() {
   const { me, members, children, activity, family } = S.data;
   const inv = S.invite;
@@ -703,6 +730,8 @@ function familyScreen() {
     </section>
 
     ${shareCard()}
+
+    ${S.data.hasShortcutKey ? sharesCard() : ''}
 
     ${diagCard()}
 
@@ -936,6 +965,10 @@ const actions = {
   filter: (el) => { S.filter = el.dataset.id; render(); },
   'toggle-show-done': () => { S.showDone = !S.showDone; render(); },
   'enable-push': enablePush,
+  async 'load-shares'() {
+    try { S.shares = await api('/api/shares'); } catch (e) { toast(e.message); }
+    render();
+  },
   async 'shortcut-create'() {
     if (S.data.hasShortcutKey && !confirm('This replaces your current key. The old Shortcut will stop working until you paste the new key. Continue?')) return;
     try {

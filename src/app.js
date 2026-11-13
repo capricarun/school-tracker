@@ -721,6 +721,37 @@ export function createApp(db) {
   }
 
   // Compare titles by their letters and digits in any script (Tamil, Hindi… not just English).
+  async function logShare(req, { text = '', files = [], added = 0, matchedId = null, message = '' }) {
+    try {
+      const parts = (req.files || []).map((f) => `${f.fieldname}:file(${f.mimetype}, ${f.size} B)`);
+      const fields = Object.entries(typeof req.body === 'object' && req.body ? req.body : {}).map(([k, v]) => `${k}:text(${String(v).length} chars)`);
+      await db.run(
+        'INSERT INTO share_log(family_id, member_id, at, content_type, fields, text, files, added, matched_id, message) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [req.familyId, req.member.id, nowIso(), String(req.get('content-type') || '').split(';')[0], [...fields, ...parts].join(', ').slice(0, 500),
+          String(text).slice(0, 300), JSON.stringify(files.map((f) => ({ name: f.name, type: f.type, size: f.data.length }))), added, matchedId, String(message).slice(0, 400)]
+      );
+      await db.run('DELETE FROM share_log WHERE family_id = ? AND id NOT IN (SELECT id FROM share_log WHERE family_id = ? ORDER BY id DESC LIMIT 30)', [req.familyId, req.familyId]);
+    } catch (err) {
+      console.warn('[share-log]', err.message);
+    }
+  }
+
+  app.get(
+    '/api/shares',
+    auth,
+    wrap(async (req, res) => {
+      const rows = await db.all(
+        `SELECT s.*, m.name AS who, i.title AS matched_title FROM share_log s LEFT JOIN members m ON m.id = s.member_id
+         LEFT JOIN items i ON i.id = s.matched_id WHERE s.family_id = ? ORDER BY s.id DESC LIMIT 15`,
+        [req.familyId]
+      );
+      res.json(rows.map((r) => ({
+        at: r.at, who: r.who, contentType: r.content_type, fields: r.fields, text: r.text, files: JSON.parse(r.files || '[]'),
+        added: Number(r.added), matchedId: r.matched_id, matchedTitle: r.matched_title, message: r.message,
+      })));
+    })
+  );
+
   const normTitle = (t) => String(t).toLowerCase().normalize('NFKC').replace(/[^\p{L}\p{N}]+/gu, '');
 
   app.post(
@@ -732,13 +763,27 @@ export function createApp(db) {
     multer({ storage: multer.memoryStorage(), limits: { fileSize: config.maxFileMb * 1048576 * 2, files: 6, fieldSize: 64 * 1024 } }).any(),
     wrap(async (req, res) => {
       limit('quick:' + req.member.id, 60, 3600e3);
+      const sniff = (buf, declared) => {
+        const h = buf.subarray(0, 12);
+        if (h[0] === 0xff && h[1] === 0xd8) return 'image/jpeg';
+        if (h[0] === 0x89 && h[1] === 0x50 && h[2] === 0x4e && h[3] === 0x47) return 'image/png';
+        if (h.toString('latin1', 0, 4) === '%PDF') return 'application/pdf';
+        if (h.toString('latin1', 0, 4) === 'GIF8') return 'image/gif';
+        if (h.toString('latin1', 0, 4) === 'RIFF' && h.toString('latin1', 8, 12) === 'WEBP') return 'image/webp';
+        if (/ftyp(heic|heix|mif1|msf1|hevc)/.test(h.toString('latin1', 4, 12))) return 'image/heic';
+        return declared || 'application/octet-stream';
+      };
+      const extFor = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/heic': '.heic', 'application/pdf': '.pdf', 'image/gif': '.gif', 'image/webp': '.webp' };
+      const allParts = (req.files || []).map((f) => ({ field: f.fieldname, name: f.originalname, type: f.mimetype, size: f.size }));
       const files = (req.files || [])
-        .filter((f) => f.size > 0 && f.size <= config.maxFileMb * 1048576 * 2 && !/^text\//.test(f.mimetype))
-        .map((f) => ({
-          name: (f.originalname || 'whatsapp-photo').replace(/[\\/\r\n"]/g, '_').slice(0, 120),
-          type: f.mimetype === 'application/octet-stream' && /\.(jpe?g)$/i.test(f.originalname || '') ? 'image/jpeg' : f.mimetype,
-          data: f.buffer,
-        }));
+        .filter((f) => f.size > 0 && f.size <= config.maxFileMb * 1048576 * 2 && !(/^text\//.test(f.mimetype) && !/\.(jpe?g|png|heic|pdf)$/i.test(f.originalname || '')))
+        .map((f) => {
+          const type = sniff(f.buffer, f.mimetype);
+          let name = (f.originalname || 'whatsapp-photo').replace(/[\\/\r\n"]/g, '_').slice(0, 120);
+          if (extFor[type] && !/\.[a-z0-9]{2,4}$/i.test(name)) name += extFor[type];
+          return { name, type, data: f.buffer };
+        })
+        .filter((f) => !/^text\//.test(f.type));
       // A Shortcut may also send the text as a .txt file part.
       const textPart = (req.files || []).find((f) => /^text\//.test(f.mimetype));
       if (textPart && !req.body?.text) req.body = { ...(req.body || {}), text: textPart.buffer.toString('utf8') };
@@ -752,12 +797,14 @@ export function createApp(db) {
         const parts = Object.keys(req.body || {}).concat((req.files || []).map((f) => f.fieldname));
         console.warn(`[quick-add] empty share from ${req.member.name}: content-type=${req.get('content-type')}, fields=[${parts.join(',')}]`);
         if (req.is('multipart/form-data') && parts.length) {
+          await logShare(req, { message: 'empty form' });
           return res.json({
             ok: false, added: 0,
             message: `School Tracker got the share but no text or photo in it (fields: ${parts.join(', ') || 'none'}). In the Shortcut's Form, set text = Text and photo = Images.`,
           });
         }
         // Running the Shortcut from the Shortcuts app (no shared text) is a handy connection test.
+        await logShare(req, { message: 'connection test (nothing shared)' });
         return res.json({ ok: true, added: 0, message: `Connected to School Tracker as ${req.member.name}. Now share a WhatsApp message to it.` });
       }
       const children = await db.all('SELECT id, name, grade, color FROM children WHERE family_id = ? ORDER BY created_at', [req.familyId]);
@@ -829,6 +876,7 @@ export function createApp(db) {
       }
       const when = (it) => `${dayWord(it.date)}${it.time ? ' ' + fmtTime(it.time) : ''}`;
       const nudge = undated && reminderAt({}, items[0].rem[0]);
+      void allParts;
       const photoNote = attached ? ` (+ ${attached} ${files.every((f) => f.type.startsWith('image/')) ? 'photo' : 'file'}${attached > 1 ? 's' : ''})` : '';
       const message = (!items.length && attached)
         ? `Photo added to the existing item: ${existingRows.find((r) => r.id === attachTo[0])?.title || 'school item'}`
@@ -843,6 +891,7 @@ export function createApp(db) {
           })();
       if (!items.length) console.log(`[quick-add] nothing added; duplicate of [${dupIds.join(',')}] for "${(text || '').slice(0, 60).replace(/\s+/g, ' ')}"`);
       console.log(`[quick-add] ${req.member.name}: found ${found.length}, added ${items.length}, files ${files.length}/${attached} attached (${engine})`);
+      await logShare(req, { text, files, added: items.length, matchedId: items.length ? ids[0] : dupIds[0] || null, message });
       res.json({ ok: true, engine, added: items.length, message, ids });
     })
   );

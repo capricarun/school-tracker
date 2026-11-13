@@ -520,3 +520,5 @@ body.typing .screen { padding-bottom: 24px; }
 .steps li + li { margin-top: 8px; }
 .steps ul { margin: 6px 0 0; padding-left: 18px; }
 .steps code, .howto code { font-size: 13px; background: var(--sunk); padding: 1px 5px; border-radius: 4px; }
+.share-row { padding: 12px 0; border-top: 1px solid var(--line); }
+.share-row:first-of-type { border-top: none; padding-top: 0; }
