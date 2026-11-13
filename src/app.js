@@ -1,6 +1,7 @@
 import express from 'express';
 import multer from 'multer';
 import path from 'node:path';
+import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { newId, newToken, hashToken, nowIso, rowToItem } from './db.js';
 import { TYPES, defaultReminders, startOfDay, isValidKey, isCustom, MAX_CUSTOM, toYmd, reminderAt } from '../public/shared/reminders.js';
@@ -10,6 +11,7 @@ import { pushToMember, vapidPublicKey, verifyAction } from './push.js';
 import { buildNotification, status as schedulerStatus, dayWord, fmtTime } from './scheduler.js';
 import { config } from './config.js';
 
+const APP_VERSION = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const COLORS = ['#0E6B5E', '#B4561A', '#1D4E89', '#7A3E9D', '#8A6D00'];
 
@@ -159,7 +161,13 @@ export function createApp(db) {
     '/healthz',
     wrap(async (req, res) => {
       await db.get('SELECT 1 AS ok');
-      res.json({ ok: true, time: new Date().toString() });
+      res.json({
+        ok: true,
+        version: APP_VERSION,
+        commit: (process.env.RENDER_GIT_COMMIT || '').slice(0, 7) || undefined,
+        features: ['quick-add-form', 'photos', 'links', 'undated'],
+        time: new Date().toString(),
+      });
     })
   );
 
@@ -740,6 +748,14 @@ export function createApp(db) {
           : Object.values(b || {}).find((v) => typeof v === 'string' && v.trim().length > 3);
       const text = typeof raw === 'string' ? raw.trim().slice(0, 6000) : '';
       if (!text && !files.length) {
+        const parts = Object.keys(req.body || {}).concat((req.files || []).map((f) => f.fieldname));
+        console.warn(`[quick-add] empty share from ${req.member.name}: content-type=${req.get('content-type')}, fields=[${parts.join(',')}]`);
+        if (req.is('multipart/form-data') && parts.length) {
+          return res.json({
+            ok: false, added: 0,
+            message: `School Tracker got the share but no text or photo in it (fields: ${parts.join(', ') || 'none'}). In the Shortcut's Form, set text = Text and photo = Images.`,
+          });
+        }
         // Running the Shortcut from the Shortcuts app (no shared text) is a handy connection test.
         return res.json({ ok: true, added: 0, message: `Connected to School Tracker as ${req.member.name}. Now share a WhatsApp message to it.` });
       }
