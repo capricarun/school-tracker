@@ -135,3 +135,34 @@ test('custom reminders and attachments', async () => {
   st = await call('/api/state', { token: tok });
   assert.equal(st.body.items.find((i) => i.id === id).attachments.length, 1);
 });
+
+test('WhatsApp import: per-message dates, skips seen messages, past items dropped', async () => {
+  const { parseWhatsAppExport } = await import('../public/shared/whatsapp.js');
+  const a = await call('/api/family', { method: 'POST', body: { memberName: 'A', children: [{ name: 'Aarav', grade: 'Grade 4 · 4B' }] } });
+  const tok = a.body.token;
+  const p = (n) => String(n).padStart(2, '0');
+  const dmy = (d) => `${p(d.getDate())}/${p(d.getMonth() + 1)}/${String(d.getFullYear()).slice(2)}`;
+  const day = (n) => new Date(Date.now() + n * 864e5);
+  const chat = [
+    `[${dmy(day(-3))}, 7:45 PM] Class Teacher 4B: Old circular: sports day was on ${dmy(day(-1))}.`,
+    `[${dmy(day(-1))}, 6:30 PM] Class Teacher 4B: Science project to be submitted tomorrow.`,
+    `[${dmy(day(-1))}, 6:31 PM] Parent: Thank you ma'am`,
+    `[${dmy(day(0))}, 7:05 AM] Class Teacher 4B: PTM on ${day(5).getDate()} ${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][day(5).getMonth()]} at 10:30 am in the auditorium.`,
+  ].join('\n');
+  const { messages } = parseWhatsAppExport(chat);
+  assert.equal(messages.length, 4);
+
+  const r1 = await call('/api/import/chat', { method: 'POST', token: tok, body: { chatName: 'Class 4B', messages } });
+  assert.equal(r1.status, 200);
+  assert.equal(r1.body.newMessages, 4);
+  // "tomorrow" in yesterday's message = today; the old sports day is in the past and dropped
+  const ymd = (d) => `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  assert.deepEqual(r1.body.items.map((i) => [i.type, i.date]).sort(), [['Assignment', ymd(day(0))], ['Meeting', ymd(day(5))]].sort());
+  assert.ok(r1.body.items.every((i) => i.msgId && i.sender === 'Class Teacher 4B'));
+
+  await call('/api/import/seen', { method: 'POST', token: tok, body: { ids: r1.body.newIds, chatName: 'Class 4B' } });
+  const r2 = await call('/api/import/chat', { method: 'POST', token: tok, body: { chatName: 'Class 4B', messages } });
+  assert.equal(r2.body.newMessages, 0);
+  assert.equal(r2.body.alreadySeen, 4);
+  assert.equal(r2.body.items.length, 0);
+});

@@ -2,6 +2,8 @@ import {
   TYPES, REMINDERS, reminderAt, upcomingReminders, daysFromToday, parseYmd, defaultReminders, toYmd,
   isCustom, MAX_CUSTOM, pad,
 } from './shared/reminders.js';
+import { parseWhatsAppExport, chatNameFromFile } from './shared/whatsapp.js';
+import { readChatFile } from './shared/unzip.js';
 
 /* ---------------- helpers ---------------- */
 const $app = document.getElementById('app');
@@ -80,6 +82,9 @@ const S = {
   uploading: 0,
   viewer: null, // { att, url, text, confirmDelete }
   diag: null, // result of the reminder check
+  importDays: 14, // how far back to look on a first import
+  importing: false,
+  importInfo: null, // { chatName, ids, newMessages, alreadySeen } while reviewing an import
 };
 const blobUrls = new Map(); // attachment id -> object URL (thumbnails + viewer)
 const blobData = new Map(); // attachment id -> Blob (for Share)
@@ -320,11 +325,37 @@ function homeScreen() {
   </main>`;
 }
 
+function importCard() {
+  return `<section class="card stack" style="gap:12px">
+    <div><h2>Import a WhatsApp group</h2>
+      <p class="small" style="margin:4px 0 0">Reads the school group's new messages, finds every date and task, and notifies your family once you save.</p></div>
+    <div class="field"><span class="label">On the first import, read messages from the last</span>
+      <div class="chips" role="group" aria-label="How far back">${[7, 14, 30].map(
+        (d) => `<button class="chip sm" data-act="import-days" data-id="${d}" aria-pressed="${S.importDays === d}">${d} days</button>`
+      ).join('')}</div></div>
+    <button class="btn primary block" data-act="import-chat" ${S.importing ? 'disabled' : ''}>
+      ${S.importing ? '<span class="spinner" aria-hidden="true"></span> Reading the chat…' : 'Choose exported chat'}</button>
+    <input type="file" id="chat-file" accept=".zip,.txt,application/zip,text/plain" hidden>
+    <details class="howto">
+      <summary>How to export the chat on iPhone</summary>
+      <ol>
+        <li>In WhatsApp, open the school group and tap the <b>group name</b> at the top.</li>
+        <li>Scroll down and tap <b>Export Chat</b> → <b>Without Media</b>.</li>
+        <li>Choose <b>Save to Files</b> → <b>On My iPhone</b> → <b>Save</b>.</li>
+        <li>Come back here, tap <b>Choose exported chat</b> and pick the file (it ends in .zip).</li>
+      </ol>
+      <p class="small" style="margin:0">Do this every few days. Messages you already imported are skipped, so you only see what's new.</p>
+    </details>
+  </section>`;
+}
+
 function addScreen() {
   const empty = !S.text.trim();
   return `<main class="screen">
-    <div><h1>Add from a message</h1>
-      <p class="sub" style="margin-top:8px">Paste what the school sent. We pull out each date, time and to-do, and you check it before saving.</p></div>
+    <div><h1>Add from school messages</h1>
+      <p class="sub" style="margin-top:8px">Import the class WhatsApp group, or paste a single message. We pull out each date, time and to-do, and you check it before saving.</p></div>
+    ${importCard()}
+    <h2 class="eyebrow" style="margin-top:4px">Or paste one message</h2>
     <div class="chips" role="group" aria-label="Where did it come from?">${SOURCES.map(
       (s) => `<button class="chip" data-act="src" data-id="${esc(s)}" aria-pressed="${S.src === s}">${esc(s)}</button>`
     ).join('')}</div>
@@ -416,7 +447,9 @@ function draftCard(d, i) {
     ? 'Pick a date to schedule reminders'
     : fr.length
       ? `${fr.length} reminder${fr.length > 1 ? 's' : ''}: ` + fr.map((x) => `${dayLabel(x)} ${fmtClock(x)}`).join(' · ')
-      : 'This date has passed — no reminders will be sent';
+      : daysFromToday(d.date) === 0
+        ? 'Due today — the usual reminder times have passed. Add an extra reminder above if you want one.'
+        : 'This date has passed — no reminders will be sent';
   return `<div class="card stack" style="gap:14px;${d.inc ? '' : 'opacity:.5'}">
     <div class="row between"><span class="eyebrow" style="font-size:12px">Item ${i + 1}</span>
       <button class="btn small" data-act="draft-inc" data-i="${i}" aria-pressed="${d.inc}">${d.inc ? 'Skip' : 'Include'}</button></div>
@@ -441,10 +474,12 @@ function draftCard(d, i) {
 
 function reviewScreen() {
   const n = S.drafts.filter((d) => d.inc).length;
+  const imp = S.importInfo;
   const title = S.drafts.length ? `Found ${S.drafts.length} item${S.drafts.length > 1 ? 's' : ''}` : 'No dates found';
+  const fromLine = imp ? `<p class="small" style="margin:6px 0 0">From ${imp.newMessages} new message${imp.newMessages === 1 ? '' : 's'} in <b>${esc(imp.chatName)}</b>${imp.alreadySeen ? ` · ${imp.alreadySeen} already imported earlier were skipped` : ''}</p>` : '';
   return `<main class="screen no-nav">
-    <button class="link" data-act="go" data-to="#add">${ICON.back} Edit message</button>
-    <div><h1 style="font-size:26px">${title}</h1>
+    <button class="link" data-act="go" data-to="#add">${ICON.back} ${S.importInfo ? 'Back' : 'Edit message'}</button>
+    <div><h1 style="font-size:26px">${title}</h1>${fromLine}
       <p class="sub" style="margin-top:8px;font-size:14px">${S.drafts.length ? 'Check each one. Fix anything that is wrong, skip what you don\'t need.' : ''}
       ${S.engine === 'claude' ? 'Read by Claude.' : S.engine === 'rules' ? 'Read by the built-in date reader.' : ''}</p></div>
     ${S.drafts.map(draftCard).join('')}
@@ -773,6 +808,37 @@ async function openViewer(att) {
   render();
 }
 
+/* ---------------- WhatsApp import ---------------- */
+async function importChat(file) {
+  S.importing = true;
+  render();
+  try {
+    const { messages } = parseWhatsAppExport(await readChatFile(file));
+    if (!messages.length) throw new Error("That file doesn't look like a WhatsApp chat export");
+    const since = toYmd(new Date(Date.now() - S.importDays * 864e5));
+    const recent = messages.filter((m) => m.date >= since);
+    const chatName = chatNameFromFile(file.name);
+    const r = await api('/api/import/chat', { method: 'POST', body: { chatName, messages: recent } });
+    S.engine = r.engine;
+    S.src = 'WhatsApp';
+    if (!r.items.length) {
+      if (r.newIds.length) await api('/api/import/seen', { method: 'POST', body: { ids: r.newIds, chatName } });
+      toast(r.newMessages
+        ? `Read ${r.newMessages} new message${r.newMessages === 1 ? '' : 's'} from ${chatName}: no upcoming dates or tasks`
+        : `No new messages in ${chatName} since your last import`);
+      return;
+    }
+    S.importInfo = { chatName, ids: r.newIds, newMessages: r.newMessages, alreadySeen: r.alreadySeen };
+    S.drafts = r.items.map((x) => ({ ...x, inc: true, line: x.sender ? `${x.sender}: ${x.line}` : x.line }));
+    go('#review');
+  } catch (e) {
+    toast(e.message || 'Could not read that file');
+  } finally {
+    S.importing = false;
+    render();
+  }
+}
+
 /* ---------------- actions ---------------- */
 function setPath(path, value) {
   const parts = path.split('.');
@@ -801,6 +867,8 @@ const actions = {
   filter: (el) => { S.filter = el.dataset.id; render(); },
   'toggle-show-done': () => { S.showDone = !S.showDone; render(); },
   'enable-push': enablePush,
+  'import-days': (el) => { S.importDays = Number(el.dataset.id); render(); },
+  'import-chat': () => document.getElementById('chat-file')?.click(),
   async 'run-diag'() {
     S.diag = { loading: true };
     render();
@@ -839,6 +907,7 @@ const actions = {
   'clear-text': () => { S.text = ''; render(); },
   async extract() {
     if (!S.text.trim()) return;
+    S.importInfo = null;
     S.extracting = true;
     render();
     try {
@@ -854,6 +923,7 @@ const actions = {
   },
   manual() {
     S.engine = '';
+    S.importInfo = null;
     S.drafts = [{ title: '', type: 'Event', childId: S.data.children[0]?.id || null, date: toYmd(new Date(Date.now() + 864e5)), time: '', location: '', line: '', inc: true }];
     go('#review');
   },
@@ -871,10 +941,15 @@ const actions = {
         body: {
           items: list.map((d) => ({
             title: d.title.trim(), type: d.type, childId: d.childId, date: d.date, time: d.time, location: d.location,
-            source: S.src, msg: d.line || S.text.slice(0, 2000), rem: draftRems(d),
+            source: S.importInfo ? `WhatsApp · ${S.importInfo.chatName}`.slice(0, 40) : S.src,
+            msg: d.line || S.text.slice(0, 2000), rem: draftRems(d),
           })),
         },
       });
+      if (S.importInfo) {
+        await api('/api/import/seen', { method: 'POST', body: { ids: S.importInfo.ids, chatName: S.importInfo.chatName } }).catch(() => {});
+        S.importInfo = null;
+      }
       const n = list.reduce((c, d) => c + upcomingReminders({ date: d.date, time: d.time, rem: draftRems(d) }).length, 0);
       S.drafts = [];
       S.text = '';
@@ -882,7 +957,7 @@ const actions = {
       await refresh();
       go('#home');
       const others = S.data.members.length - 1;
-      toast(`${list.length} saved · ${n} reminders scheduled${others ? ' · shared with your family' : ''}`);
+      toast(`${list.length} saved · ${n} reminders scheduled${others ? ' · your family has been notified' : ''}`);
     } catch (e) {
       toast(e.message);
     } finally {
@@ -1082,6 +1157,10 @@ document.addEventListener('change', (e) => {
   }
 });
 document.addEventListener('change', (e) => {
+  if (e.target.id === 'chat-file' && e.target.files[0]) {
+    importChat(e.target.files[0]);
+    e.target.value = '';
+  }
   if (e.target.id === 'file-input' && S.route === 'item') {
     uploadFiles(S.param, e.target.files);
     e.target.value = '';

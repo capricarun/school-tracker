@@ -48,6 +48,9 @@ const SCHEMA = `
     created_by TEXT, created_at TEXT NOT NULL);
   CREATE INDEX IF NOT EXISTS attachments_item ON attachments(item_id);
   CREATE INDEX IF NOT EXISTS attachments_family ON attachments(family_id);
+  CREATE TABLE IF NOT EXISTS chat_seen (
+    family_id TEXT NOT NULL, msg_id TEXT NOT NULL, chat TEXT NOT NULL DEFAULT '', seen_at TEXT NOT NULL,
+    PRIMARY KEY (family_id, msg_id));
   CREATE TABLE IF NOT EXISTS activity (
     id INTEGER PRIMARY KEY AUTOINCREMENT, family_id TEXT NOT NULL, member_id TEXT, text TEXT NOT NULL, at TEXT NOT NULL);
 `;

@@ -3,9 +3,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { newId, newToken, hashToken, nowIso, rowToItem } from './db.js';
 import { TYPES, defaultReminders, startOfDay, isValidKey, isCustom, MAX_CUSTOM } from '../public/shared/reminders.js';
-import { extractItems } from './extract.js';
+import { extractItems, extractFromChat } from './extract.js';
 import { pushToMember, vapidPublicKey, verifyAction } from './push.js';
-import { buildNotification, status as schedulerStatus } from './scheduler.js';
+import { buildNotification, status as schedulerStatus, dayWord, fmtTime } from './scheduler.js';
 import { config } from './config.js';
 
 const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
@@ -27,7 +27,7 @@ export function createApp(db) {
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', 1);
-  app.use(express.json({ limit: '64kb' }));
+  app.use(express.json({ limit: '2mb' }));
   app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'same-origin');
@@ -356,6 +356,7 @@ export function createApp(db) {
         logStmt(req.familyId, req.member.id, `added ${ids.length} item${ids.length > 1 ? 's' : ''}`),
       ]);
       res.json({ ids });
+      notifyNewItems(req.member, items, ids).catch((err) => console.warn('[push] new-item notice failed', err.message));
     })
   );
 
@@ -413,6 +414,18 @@ export function createApp(db) {
         silent: true,
       }).catch(() => {});
     }
+  }
+
+  // Tell everyone else in the family (with reminders on) that new school items arrived.
+  async function notifyNewItems(member, items, ids) {
+    const others = await db.all('SELECT id FROM members WHERE family_id = ? AND id != ? AND notify = 1', [member.family_id, member.id]);
+    if (!others.length || !items.length) return;
+    const first = items[0];
+    const payload =
+      items.length === 1
+        ? { title: `New: ${first.title}`, body: `${dayWord(first.date)}${first.time ? ' at ' + fmtTime(first.time) : ''} · added by ${member.name}`, tag: `new-${ids[0]}`, url: `/#item/${ids[0]}` }
+        : { title: `${items.length} new school items`, body: items.slice(0, 3).map((i) => i.title).join(' · ') + ` · added by ${member.name}`, tag: `new-${ids[0]}`, url: '/#home' };
+    for (const o of others) await pushToMember(db, o.id, payload);
   }
 
   async function snooze(member, row, minutes) {
@@ -608,6 +621,52 @@ export function createApp(db) {
         recentSent: sent.map((r) => ({ key: r.rem_key, at: r.sent_at, title: r.title })),
         recentDeliveries: schedulerStatus.recent.filter((r) => r.memberId === req.member.id).slice(0, 5),
       });
+    })
+  );
+
+  // ---------- WhatsApp group import ----------
+  // The phone parses the exported chat and sends only recent messages; the server skips any it
+  // has already seen for this family, extracts items, and returns them as drafts for review.
+  app.post(
+    '/api/import/chat',
+    auth,
+    wrap(async (req, res) => {
+      limit('import:' + req.member.id, 20, 3600e3);
+      const chatName = str(req.body.chatName, 80) || 'WhatsApp group';
+      const raw = Array.isArray(req.body.messages) ? req.body.messages.slice(-400) : [];
+      const messages = raw
+        .filter((m) => m && typeof m.id === 'string' && isYmd(m.date) && isHm(m.time) && typeof m.text === 'string')
+        .map((m) => ({ id: m.id.slice(0, 40), date: m.date, time: m.time, sender: str(m.sender, 60), text: m.text.slice(0, 4000) }));
+      const seen = new Set();
+      for (let i = 0; i < messages.length; i += 200) {
+        const chunk = messages.slice(i, i + 200);
+        const rows = await db.all(
+          `SELECT msg_id FROM chat_seen WHERE family_id = ? AND msg_id IN (${chunk.map(() => '?').join(',')})`,
+          [req.familyId, ...chunk.map((m) => m.id)]
+        );
+        rows.forEach((r) => seen.add(r.msg_id));
+      }
+      const fresh = messages.filter((m) => !seen.has(m.id));
+      const children = await db.all('SELECT id, name, grade, color FROM children WHERE family_id = ? ORDER BY created_at', [req.familyId]);
+      const result = fresh.length
+        ? await extractFromChat(fresh, { children, today: startOfDay(new Date()), chatName })
+        : { engine: config.anthropicKey ? 'claude' : 'rules', items: [] };
+      res.json({ ...result, chatName, total: messages.length, alreadySeen: seen.size, newMessages: fresh.length, newIds: fresh.map((m) => m.id) });
+    })
+  );
+
+  app.post(
+    '/api/import/seen',
+    auth,
+    wrap(async (req, res) => {
+      const ids = (Array.isArray(req.body.ids) ? req.body.ids : []).filter((x) => typeof x === 'string').slice(0, 1000);
+      const chat = str(req.body.chatName, 80);
+      const t = nowIso();
+      for (let i = 0; i < ids.length; i += 100) {
+        await db.batch(ids.slice(i, i + 100).map((id) => ['INSERT OR IGNORE INTO chat_seen(family_id, msg_id, chat, seen_at) VALUES (?, ?, ?, ?)', [req.familyId, id.slice(0, 40), chat, t]]));
+      }
+      if (ids.length) await log(req.familyId, req.member.id, `imported ${ids.length} message${ids.length > 1 ? 's' : ''} from ${chat || 'WhatsApp'}`);
+      res.json({ ok: true });
     })
   );
 

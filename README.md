@@ -6,6 +6,7 @@ School Tracker turns those messages into a shared list for the family and **send
 - **Paste → extract.** Paste (or, on Android, *Share*) a school message. Claude pulls out every dated item: title, type, child, date, time and place. You review and save.
 - **Smart reminders.** Each type gets a sensible default schedule (3 days before, the evening before at 7 PM, the morning of at 7 AM, 1 hour before), editable per item.
 - **Shared by the family.** Invite your partner or a grandparent with a link. Everyone sees the same list. When one person marks something done, reminders stop for everyone, and the others get a quiet "handled" note.
+- **WhatsApp group import.** Export the school group from WhatsApp (*Export Chat → Without Media*, works on iPhone and Android) and pick the file in the app. It reads the .zip in the browser, skips system/media/chit-chat lines, resolves "tomorrow"/"Friday" against each message's own date, ignores anything already imported and anything in the past, and shows the items for review. On save, everyone else in the family gets a push notification. (WhatsApp has no API for reading personal group chats, so a periodic export is the safe, terms-compliant route.)
 - **Custom reminders.** Add up to 10 reminders per item at any date and time you choose, on top of the default schedule (also available while reviewing extracted items).
 - **Documents & notes.** Attach photos of circulars, PDFs and Office files (up to 4 MB each; phone photos are shrunk automatically), or paste content as a note, or paste a screenshot. Everyone in the family can open them in the built-in viewer, with Download, Open, Share, Copy and Delete. Files are stored in the database, so this works on Render free + Turso too.
 - **Actionable notifications.** *Mark done* and *Snooze 1 hr* right from the notification.
@@ -103,6 +104,7 @@ Limits to know: free tiers can change; if the monitor misses a ping the app slee
 | POST | `/api/items/:id/done` · `/snooze` | `{done}` · `{minutes}` |
 | POST | `/api/items/:id/attachments` | raw file body, `Content-Type`, `X-Filename` → `{id}` |
 | POST | `/api/items/:id/notes` | `{text, name?}` pasted content → `{id}` |
+| POST | `/api/import/chat` · `/api/import/seen` | `{chatName, messages[]}` → drafts + new message ids · mark ids imported |
 | GET · DELETE | `/api/attachments/:id` | download / remove (family members only) |
 | POST | `/api/invites` | `{linkDevice?}` → link |
 | POST · PATCH · DELETE | `/api/children[/:id]` | manage children |

@@ -511,3 +511,8 @@ body.typing nav.bottom,
 body.typing .savebar,
 body.typing .toast { display: none; }
 body.typing .screen { padding-bottom: 24px; }
+
+/* ---------- WhatsApp import ---------- */
+.howto summary { cursor: pointer; font-size: 14px; font-weight: 600; color: var(--accent); min-height: 32px; display: flex; align-items: center; }
+.howto ol { margin: 8px 0 10px; padding-left: 20px; font-size: 14px; line-height: 1.55; color: var(--ink-2); }
+.howto li + li { margin-top: 4px; }
