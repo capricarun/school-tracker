@@ -704,12 +704,18 @@ export function createApp(db) {
   app.post(
     '/api/quick-add',
     express.text({ type: 'text/*', limit: '64kb' }),
+    express.urlencoded({ extended: false, limit: '64kb' }),
     auth,
     wrap(async (req, res) => {
       limit('quick:' + req.member.id, 60, 3600e3);
-      const raw = typeof req.body === 'string' ? req.body : req.body?.text;
+      const b = req.body;
+      const raw = typeof b === 'string' ? b
+        : typeof b?.text === 'string' ? b.text
+          : Object.values(b || {}).find((v) => typeof v === 'string' && v.trim().length > 3);
       const text = typeof raw === 'string' ? raw.trim().slice(0, 6000) : '';
-      if (!text) throw bad('Nothing was shared');
+      if (!text) {
+        return res.json({ ok: true, added: 0, message: `Connected to School Tracker as ${req.member.name}. Now share a WhatsApp message to it.` });
+      }
       const children = await db.all('SELECT id, name, grade, color FROM children WHERE family_id = ? ORDER BY created_at', [req.familyId]);
       const today = startOfDay(new Date());
       const { engine, items: found } = await extractItems(text, { children, today });
@@ -746,6 +752,7 @@ export function createApp(db) {
         : found.length
           ? 'Already in School Tracker, or the date has passed. Nothing new added.'
           : 'No date found in that message. Open School Tracker to add it by hand.';
+      console.log(`[quick-add] ${req.member.name}: found ${found.length}, added ${items.length} (${engine})`);
       res.json({ ok: true, engine, added: items.length, message, ids });
     })
   );
@@ -770,7 +777,14 @@ export function createApp(db) {
   app.use((err, req, res, next) => {
     const status = err.status || (err.type === 'entity.parse.failed' ? 400 : 500);
     if (status >= 500) console.error(err);
-    res.status(status).json({ error: status >= 500 ? 'Something went wrong' : err.message });
+    const error = status >= 500 ? 'Something went wrong' : err.message;
+    const forShortcut =
+      status === 401 ? 'School Tracker did not accept the key. In the app go to Family → Share from WhatsApp → Set up again, and paste the new key into the Shortcut header.'
+        : status === 403 ? 'This key can only add items.'
+          : status === 429 ? 'Too many shares in the last hour. Try again later.'
+            : `School Tracker: ${error}`;
+    if (req.originalUrl.startsWith('/api/quick-add')) console.warn(`[quick-add] ${status} ${error}`);
+    res.status(status).json({ error, message: forShortcut });
   });
 
   return app;
