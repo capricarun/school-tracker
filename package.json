@@ -1,6 +1,6 @@
 {
   "name": "school-tracker",
-  "version": "1.3.1",
+  "version": "1.3.2",
   "description": "Turn school WhatsApp/app messages into a shared family tracker with push reminders",
   "type": "module",
   "main": "src/server.js",

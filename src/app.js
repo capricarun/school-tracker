@@ -720,7 +720,8 @@ export function createApp(db) {
     return [`c:${toYmd(at)}T${p(at.getHours())}:${p(at.getMinutes())}`];
   }
 
-  const normTitle = (t) => String(t).toLowerCase().replace(/[^a-z0-9]+/g, '');
+  // Compare titles by their letters and digits in any script (Tamil, Hindi… not just English).
+  const normTitle = (t) => String(t).toLowerCase().normalize('NFKC').replace(/[^\p{L}\p{N}]+/gu, '');
 
   app.post(
     '/api/quick-add',
@@ -763,13 +764,16 @@ export function createApp(db) {
       const today = startOfDay(new Date());
       const { engine, items: found } = await extractItems(text, { children, today, images: files });
       const todayYmd = toYmd(today);
-      const existingRows = await db.all('SELECT id, title, date FROM items WHERE family_id = ? AND date >= ?', [req.familyId, todayYmd]);
-      const existingId = new Map(existingRows.map((r) => [`${r.date}|${normTitle(r.title)}`, r.id]));
+      // Only open (not done) items count as duplicates; deleted items are gone from the table.
+      const existingRows = await db.all('SELECT id, title, date, no_date FROM items WHERE family_id = ? AND date >= ? AND done = 0', [req.familyId, todayYmd]);
+      const existingId = new Map(
+        existingRows.filter((r) => normTitle(r.title)).map((r) => [`${r.date}|${normTitle(r.title)}`, r.id])
+      );
       const existing = new Set(existingId.keys());
       const fresh = [];
       const dupIds = [];
       for (const f of found) {
-        const k = `${f.date}|${normTitle(f.title)}`;
+        const k = normTitle(f.title) ? `${f.date}|${normTitle(f.title)}` : `${f.date}|#${Math.random()}`;
         if (f.date < todayYmd) continue;
         if (existing.has(k)) { if (existingId.get(k)) dupIds.push(existingId.get(k)); continue; }
         existing.add(k);
@@ -784,7 +788,7 @@ export function createApp(db) {
       let undated = false;
       if (!found.length) {
         const u = text ? undatedItem(text, { children }) : { title: files.some((f) => f.type === 'application/pdf') ? 'Document from WhatsApp' : 'Photo from WhatsApp', type: 'Event', childId: children[0]?.id || null, time: '', location: '', line: '' };
-        const uk = `${todayYmd}|${normTitle(u.title)}`;
+        const uk = normTitle(u.title) ? `${todayYmd}|${normTitle(u.title)}` : `${todayYmd}|#${Date.now()}`;
         if (existingId.get(uk)) dupIds.push(existingId.get(uk));
         if (!existing.has(uk) || (!text && files.length)) {
           undated = true;
@@ -832,9 +836,12 @@ export function createApp(db) {
         ? `No date in the message${photoNote}, so it's saved for today with a reminder ${nudge ? (nudge.getDate() === new Date().getDate() ? 'at ' : 'tomorrow at ') + fmtTime(String(nudge.getHours()).padStart(2, '0') + ':' + String(nudge.getMinutes()).padStart(2, '0')) : 'later'}: ${items[0].title}`
         : items.length
         ? `Added ${items.length}${photoNote}: ${items.map((it) => `${it.title} (${when(it)})`).join(' · ')}`
-        : found.length
-          ? 'Already in School Tracker, or the date has passed. Nothing new added.'
-          : `Already saved today: ${undatedItem(text || 'Photo from WhatsApp', { children }).title}. Nothing new added.`;
+        : (() => {
+            const m = existingRows.find((r) => r.id === dupIds[0]);
+            if (m) return `Already in School Tracker: "${m.title}" (${m.no_date ? 'today, no date' : dayWord(m.date)}). Nothing new added. Delete or finish it in the app to share it again.`;
+            return found.length ? 'That date has already passed, so nothing was added.' : 'Nothing new to add from that message.';
+          })();
+      if (!items.length) console.log(`[quick-add] nothing added; duplicate of [${dupIds.join(',')}] for "${(text || '').slice(0, 60).replace(/\s+/g, ' ')}"`);
       console.log(`[quick-add] ${req.member.name}: found ${found.length}, added ${items.length}, files ${files.length}/${attached} attached (${engine})`);
       res.json({ ok: true, engine, added: items.length, message, ids });
     })

@@ -192,7 +192,14 @@ test('iPhone Shortcut quick-add: saves items, dedupes, key is add-only', async (
   assert.match(r3.body.message, /^No date in the message, so it's saved for today with a reminder .*: Send the signed consent form$/);
   const again = (await call('/api/quick-add', { method: 'POST', token: key, body: { text: 'Dear Parents,\nPlease send the signed consent form.' } })).body;
   assert.equal(again.added, 0);
-  assert.equal(again.message, 'Already saved today: Send the signed consent form. Nothing new added.');
+  assert.match(again.message, /^Already in School Tracker: "Send the signed consent form" \(today, no date\)/);
+  // once it's marked done, sharing it again adds it again
+  const consent = (await call('/api/state', { token: tok })).body.items.find((i) => i.title === 'Send the signed consent form');
+  await call(`/api/items/${consent.id}/done`, { method: 'POST', token: tok, body: { done: true } });
+  assert.equal((await call('/api/quick-add', { method: 'POST', token: key, body: { text: 'Dear Parents,\nPlease send the signed consent form.' } })).body.added, 1);
+  // non-English messages don't all collapse into one "duplicate"
+  assert.equal((await call('/api/quick-add', { method: 'POST', token: key, body: { text: 'அன்புள்ள பெற்றோர்களே, நாளை மஞ்சள் உடை அணியவும்' } })).body.added, 1);
+  assert.equal((await call('/api/quick-add', { method: 'POST', token: key, body: { text: 'प्रिय अभिभावक, कृपया पुस्तक भेजें' } })).body.added, 1);
 
   // a form-encoded body or another field name also works
   const r4 = await fetch(`${base}/api/quick-add`, { method: 'POST', headers: { authorization: 'Bearer ' + key, 'content-type': 'application/x-www-form-urlencoded' }, body: 'Text=' + encodeURIComponent('Sports day on 2nd Jan 2027 at 8 am.') });
@@ -204,9 +211,9 @@ test('iPhone Shortcut quick-add: saves items, dedupes, key is add-only', async (
   // the key cannot read family data
   assert.equal((await call('/api/state', { token: key })).status, 403);
   const st = await call('/api/state', { token: tok });
-  assert.equal(st.body.items.length, 3);
+  assert.equal(st.body.items.length, 6);
   assert.equal(st.body.hasShortcutKey, true);
-  const und = st.body.items.find((i) => i.noDate);
+  const und = st.body.items.find((i) => i.noDate && !i.done);
   assert.equal(und.rem.length, 1);
   assert.match(und.rem[0], /^c:/);
   // picking a real date clears the "no date" flag
