@@ -78,6 +78,7 @@ const S = {
   noteDraft: null, // text being pasted as a note on the open item
   uploading: 0,
   viewer: null, // { att, url, text, confirmDelete }
+  diag: null, // result of the reminder check
 };
 const blobUrls = new Map(); // attachment id -> object URL (thumbnails + viewer)
 const blobData = new Map(); // attachment id -> Blob (for Share)
@@ -513,6 +514,58 @@ function itemScreen() {
   </main>`;
 }
 
+function ago(iso) {
+  if (!iso) return 'never';
+  const s = Math.round((Date.now() - new Date(iso)) / 1000);
+  if (s < 90) return s + ' seconds ago';
+  if (s < 5400) return Math.round(s / 60) + ' minutes ago';
+  return Math.round(s / 3600) + ' hours ago';
+}
+
+function diagCard() {
+  const d = S.diag;
+  let rows = '';
+  if (d?.loading) rows = '<p class="small" style="margin:0">Checking…</p>';
+  else if (d?.error) rows = `<p class="small" style="margin:0;color:var(--danger)">${esc(d.error)}</p>`;
+  else if (d) {
+    const line = (ok, title, hint) => `<div class="row" style="align-items:flex-start;gap:10px">
+      <span class="diag-dot ${ok ? 'ok' : 'bad'}" aria-hidden="true">${ok ? '✓' : '!'}</span>
+      <span class="grow"><b style="display:block;font-size:14px">${title}</b>${hint ? `<span class="small">${hint}</span>` : ''}</span></div>`;
+    const phoneOffset = -new Date().getTimezoneOffset();
+    const tzOk = d.offsetMinutes === phoneOffset;
+    const tickAge = d.lastTickAt ? (Date.now() - new Date(d.lastTickAt)) / 1000 : Infinity;
+    const upMin = (Date.now() - new Date(d.startedAt)) / 60000;
+    const push = S.push;
+    rows = [
+      line(push === 'on', 'This device can show notifications',
+        push === 'on' ? '' : push === 'ios-install' ? 'On iPhone, open the app from the Home Screen icon (not Safari), then turn reminders on.'
+          : push === 'denied' ? 'Notifications are blocked. Allow them for this site in your phone/browser settings.'
+          : push === 'default' ? 'Tap "Turn on" above.' : 'This browser does not support notifications. Use Chrome on Android or the Home Screen app on iPhone.'),
+      line(d.subscriptions > 0, `Server knows ${d.subscriptions} device${d.subscriptions === 1 ? '' : 's'} for you`,
+        d.subscriptions > 0 ? '' : 'The server has nowhere to send your reminders. Turn reminders on again on this device.'),
+      line(d.notify, 'Reminders are switched on for you', d.notify ? '' : 'Turn on "Send me reminders" above.'),
+      line(tzOk, `Server time zone: ${esc(d.timeZone)}`,
+        tzOk ? '' : `Your phone is ${phoneOffset / 60 >= 0 ? '+' : ''}${phoneOffset / 60}h from UTC but the server is ${d.offsetMinutes / 60 >= 0 ? '+' : ''}${d.offsetMinutes / 60}h, so custom reminders fire at the wrong time. Set TZ=Asia/Kolkata on the server.`),
+      line(tickAge < 180, `Reminder checker last ran ${ago(d.lastTickAt)}`,
+        tickAge < 180 ? (upMin < 20 ? `Server started ${ago(d.startedAt)} — if it was asleep before that, reminders due then were sent late or skipped.` : '')
+          : 'The server is not checking reminders. On Render free it falls asleep: set up the uptime monitor (every 10 min).'),
+      d.lastError ? line(false, 'Last check failed', esc(d.lastError)) : '',
+      d.recentDeliveries.length
+        ? line(d.recentDeliveries.every((r) => r.delivered > 0), 'Latest reminders sent to you',
+            d.recentDeliveries.map((r) => `${esc(r.title)} — ${ago(r.at)} — ${r.delivered ? r.delivered + ' device(s)' : 'no device received it'}`).join('<br>'))
+        : d.recentSent.length
+          ? line(true, 'Latest reminders sent to you', d.recentSent.map((r) => `${esc(r.title)} — ${ago(r.at)}`).join('<br>'))
+          : line(true, 'No reminders have been sent to you yet', ''),
+    ].join('');
+  }
+  return `<section class="card stack" style="gap:12px">
+    <div class="row between"><h2>Reminder check</h2>
+      <button class="btn small" data-act="run-diag">${d ? 'Check again' : 'Run check'}</button></div>
+    ${rows || '<p class="small" style="margin:0">Not getting reminders? This checks your phone, the server clock and when reminders were last sent.</p>'}
+    ${S.push === 'on' ? '<button class="btn small" data-act="test-push" style="align-self:flex-start">Send a test notification now</button>' : ''}
+  </section>`;
+}
+
 function familyScreen() {
   const { me, members, children, activity, family } = S.data;
   const inv = S.invite;
@@ -545,6 +598,8 @@ function familyScreen() {
       <button class="toggle" data-act="me-toggle" data-k="notify" aria-pressed="${me.notify}"><span class="t-label"><b>Send me reminders</b><small>Turn off if only the other parent should get them</small></span><span class="switch" aria-hidden="true"></span></button>
       <button class="toggle" data-act="me-toggle" data-k="tellDone" aria-pressed="${me.tellDone}"><span class="t-label"><b>Tell me when it's handled</b><small>A quiet note when someone else marks done</small></span><span class="switch" aria-hidden="true"></span></button>
     </section>
+
+    ${diagCard()}
 
     <section class="stack">
       <h2 class="eyebrow">Children</h2>
@@ -743,6 +798,13 @@ const actions = {
   filter: (el) => { S.filter = el.dataset.id; render(); },
   'toggle-show-done': () => { S.showDone = !S.showDone; render(); },
   'enable-push': enablePush,
+  async 'run-diag'() {
+    S.diag = { loading: true };
+    render();
+    await checkPush().catch(() => {});
+    try { S.diag = await api('/api/diag'); } catch (e) { S.diag = { error: e.message }; }
+    render();
+  },
   async 'test-push'() {
     try {
       const r = await api('/api/push/test', { method: 'POST' });

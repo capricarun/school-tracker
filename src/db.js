@@ -117,6 +117,7 @@ export async function setSetting(db, key, value) {
 export function rowToItem(r) {
   return {
     id: r.id,
+    familyId: r.family_id,
     childId: r.child_id,
     type: r.type,
     title: r.title,

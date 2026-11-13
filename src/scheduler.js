@@ -89,13 +89,20 @@ export async function dueReminders(db, now = new Date()) {
   return due;
 }
 
+// What the scheduler has been doing, for the in-app "Reminder check".
+export const status = { startedAt: new Date().toISOString(), lastTickAt: null, lastError: null, recent: [] };
+
 export async function runTick(db, now = new Date()) {
   const due = await dueReminders(db, now);
   for (const d of due) {
     // Mark first so a slow push service can't cause duplicates on the next tick.
     if (d.key.startsWith('snooze:')) await db.run('UPDATE snoozes SET sent = 1 WHERE id = ?', [Number(d.key.slice(7))]);
     else await db.run('INSERT OR IGNORE INTO sent(item_id, rem_key, member_id, sent_at) VALUES (?, ?, ?, ?)', [d.item.id, d.key, d.memberId, nowIso()]);
-    await pushToMember(db, d.memberId, buildNotification(d.item, d.child, d.memberId, now));
+    const delivered = await pushToMember(db, d.memberId, buildNotification(d.item, d.child, d.memberId, now));
+    const entry = { at: new Date().toISOString(), memberId: d.memberId, familyId: d.item.familyId, title: d.item.title, key: d.key, delivered };
+    status.recent.unshift(entry);
+    status.recent.length = Math.min(status.recent.length, 50);
+    console.log(`[scheduler] ${d.key} "${d.item.title}" → member ${d.memberId}: ${delivered ? delivered + ' device(s)' : 'not delivered (no working device subscribed)'}`);
   }
   return due.length;
 }
@@ -106,9 +113,11 @@ export function startScheduler(db) {
     if (running) return;
     running = true;
     try {
-      const n = await runTick(db);
-      if (n) console.log(`[scheduler] sent ${n} reminder(s)`);
+      await runTick(db);
+      status.lastTickAt = new Date().toISOString();
+      status.lastError = null;
     } catch (err) {
+      status.lastError = String(err.message || err);
       console.error('[scheduler]', err);
     } finally {
       running = false;

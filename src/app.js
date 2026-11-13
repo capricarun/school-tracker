@@ -5,7 +5,7 @@ import { newId, newToken, hashToken, nowIso, rowToItem } from './db.js';
 import { TYPES, defaultReminders, startOfDay, isValidKey, isCustom, MAX_CUSTOM } from '../public/shared/reminders.js';
 import { extractItems } from './extract.js';
 import { pushToMember, vapidPublicKey, verifyAction } from './push.js';
-import { buildNotification } from './scheduler.js';
+import { buildNotification, status as schedulerStatus } from './scheduler.js';
 import { config } from './config.js';
 
 const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
@@ -578,6 +578,36 @@ export function createApp(db) {
         logStmt(req.familyId, req.member.id, `removed attachment “${a.name}”`),
       ]);
       res.json({ ok: true });
+    })
+  );
+
+  // ---------- reminder diagnostics ----------
+  app.get(
+    '/api/diag',
+    auth,
+    wrap(async (req, res) => {
+      const now = new Date();
+      const [{ n: subs }, sent] = await Promise.all([
+        db.get('SELECT COUNT(*) AS n FROM push_subs WHERE member_id = ?', [req.member.id]),
+        db.all(
+          `SELECT s.rem_key, s.sent_at, i.title FROM sent s JOIN items i ON i.id = s.item_id
+           WHERE s.member_id = ? ORDER BY s.sent_at DESC LIMIT 5`,
+          [req.member.id]
+        ),
+      ]);
+      res.json({
+        serverTime: now.toISOString(),
+        serverLocal: now.toString(),
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        offsetMinutes: -now.getTimezoneOffset(),
+        startedAt: schedulerStatus.startedAt,
+        lastTickAt: schedulerStatus.lastTickAt,
+        lastError: schedulerStatus.lastError,
+        subscriptions: Number(subs),
+        notify: !!req.member.notify,
+        recentSent: sent.map((r) => ({ key: r.rem_key, at: r.sent_at, title: r.title })),
+        recentDeliveries: schedulerStatus.recent.filter((r) => r.memberId === req.member.id).slice(0, 5),
+      });
     })
   );
 
