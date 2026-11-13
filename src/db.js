@@ -16,7 +16,7 @@ const SCHEMA = `
     name TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'member',
     notify INTEGER NOT NULL DEFAULT 1, tell_done INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL);
-  CREATE TABLE IF NOT EXISTS devices (token_hash TEXT PRIMARY KEY, member_id TEXT NOT NULL, created_at TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS devices (token_hash TEXT PRIMARY KEY, member_id TEXT NOT NULL, created_at TEXT NOT NULL, label TEXT NOT NULL DEFAULT '');
   CREATE TABLE IF NOT EXISTS invites (
     code TEXT PRIMARY KEY, family_id TEXT NOT NULL, created_by TEXT NOT NULL, member_id TEXT,
     created_at TEXT NOT NULL, expires_at TEXT NOT NULL, used_at TEXT);
@@ -102,6 +102,10 @@ async function libsql(url, authToken) {
 export async function openDb({ url = config.databaseUrl, authToken = config.databaseToken, file } = {}) {
   const db = url ? await libsql(url, authToken) : await nodeSqlite(file || path.join(config.dataDir, 'school-tracker.db'));
   await db.exec(SCHEMA);
+  // Migrations for databases created by earlier versions.
+  for (const sql of ["ALTER TABLE devices ADD COLUMN label TEXT NOT NULL DEFAULT ''"]) {
+    try { await db.exec(sql); } catch { /* column already exists */ }
+  }
   return db;
 }
 

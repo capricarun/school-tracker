@@ -85,6 +85,8 @@ const S = {
   importDays: 14, // how far back to look on a first import
   importing: false,
   importInfo: null, // { chatName, ids, newMessages, alreadySeen } while reviewing an import
+  shortcut: null, // { key, url } right after creating an iPhone Shortcut key (shown once)
+  shortcutOpen: false,
 };
 const blobUrls = new Map(); // attachment id -> object URL (thumbnails + viewer)
 const blobData = new Map(); // attachment id -> Blob (for Share)
@@ -602,6 +604,42 @@ function diagCard() {
   </section>`;
 }
 
+function shareCard() {
+  const sc = S.shortcut;
+  const has = S.data.hasShortcutKey;
+  const copyField = (label, value, id) => `<div class="field"><span class="label">${label}</span>
+    <div class="rem-add"><input type="text" readonly id="${id}" value="${esc(value)}" data-select aria-label="${label}">
+    <button class="btn small" data-act="copy" data-from="${id}">Copy</button></div></div>`;
+  if (!isIos()) {
+    return `<section class="card stack" style="gap:8px"><h2>Share from WhatsApp</h2>
+      <p class="small" style="margin:0">Install the app (Chrome menu → Install app). Then in WhatsApp long-press a message → Share → <b>School Tracker</b>, and tap Extract.</p></section>`;
+  }
+  return `<section class="card stack" style="gap:12px">
+    <div class="row between"><h2>Share from WhatsApp</h2>${has && !sc ? '<span class="small">Set up ✓</span>' : ''}</div>
+    <p class="small" style="margin:0">Add <b>School Tracker</b> to your iPhone's Share menu. Then any WhatsApp message can be shared in two taps: the dates are added and your family is notified, without opening the app.</p>
+    ${sc ? `
+      <div class="hint" style="font-size:13px">Your personal key is shown only once. It can add items but cannot read anything. Copy both values now.</div>
+      ${copyField('1. Web address (URL)', sc.url, 'sc-url')}
+      ${copyField('2. Authorization header value', 'Bearer ' + sc.key, 'sc-key')}
+      <ol class="steps">
+        <li>Open the <b>Shortcuts</b> app → tap <b>+</b> → name it <b>School Tracker</b>.</li>
+        <li>Tap the <b>ⓘ</b> (Details) button → turn on <b>Show in Share Sheet</b>. Tap <b>Receive</b> and choose only <b>Text</b>.</li>
+        <li>Add the action <b>Get Contents of URL</b>. Paste value 1 as the URL. Tap the arrow to show more:
+          <ul><li><b>Method</b>: POST</li>
+          <li><b>Headers</b> → Add new header: key <code>Authorization</code>, text: paste value 2</li>
+          <li><b>Request Body</b>: JSON → Add new field → Text → key <code>text</code>, value: tap and choose <b>Shortcut Input</b></li></ul></li>
+        <li>Add the action <b>Get Dictionary Value</b> → Get <b>Value</b> for key <code>message</code> in <b>Contents of URL</b>.</li>
+        <li>Add the action <b>Show Notification</b> → tap the text and choose <b>Dictionary Value</b>. Tap <b>Done</b>.</li>
+      </ol>
+      <p class="small" style="margin:0"><b>To use it:</b> in WhatsApp, long-press a message → <b>Forward</b> → tap the <b>Share</b> icon (bottom right) → <b>School Tracker</b>. The first time, tap <b>Always Allow</b>.</p>
+      <button class="btn small" data-act="shortcut-done" style="align-self:flex-start">I've set it up</button>`
+    : `<div class="row wrap">
+        <button class="btn small ${has ? '' : 'primary'}" data-act="shortcut-create">${has ? 'Set up again (new key)' : 'Set up the Share button'}</button>
+        ${has ? '<button class="btn small danger" data-act="shortcut-revoke">Turn off</button>' : ''}
+      </div>`}
+  </section>`;
+}
+
 function familyScreen() {
   const { me, members, children, activity, family } = S.data;
   const inv = S.invite;
@@ -634,6 +672,8 @@ function familyScreen() {
       <button class="toggle" data-act="me-toggle" data-k="notify" aria-pressed="${me.notify}"><span class="t-label"><b>Send me reminders</b><small>Turn off if only the other parent should get them</small></span><span class="switch" aria-hidden="true"></span></button>
       <button class="toggle" data-act="me-toggle" data-k="tellDone" aria-pressed="${me.tellDone}"><span class="t-label"><b>Tell me when it's handled</b><small>A quiet note when someone else marks done</small></span><span class="switch" aria-hidden="true"></span></button>
     </section>
+
+    ${shareCard()}
 
     ${diagCard()}
 
@@ -867,6 +907,23 @@ const actions = {
   filter: (el) => { S.filter = el.dataset.id; render(); },
   'toggle-show-done': () => { S.showDone = !S.showDone; render(); },
   'enable-push': enablePush,
+  async 'shortcut-create'() {
+    if (S.data.hasShortcutKey && !confirm('This replaces your current key. The old Shortcut will stop working until you paste the new key. Continue?')) return;
+    try {
+      S.shortcut = await api('/api/shortcut-key', { method: 'POST' });
+      S.data.hasShortcutKey = true;
+      render();
+    } catch (e) { toast(e.message); }
+  },
+  'shortcut-done': () => { S.shortcut = null; toast('Try it: share a WhatsApp message to School Tracker'); render(); },
+  async 'shortcut-revoke'() {
+    if (!confirm('Turn off the Share button? The Shortcut will stop working.')) return;
+    try { await api('/api/shortcut-key', { method: 'DELETE' }); S.data.hasShortcutKey = false; render(); } catch (e) { toast(e.message); }
+  },
+  async copy(el) {
+    const v = document.getElementById(el.dataset.from)?.value || '';
+    try { await navigator.clipboard.writeText(v); toast('Copied'); } catch { document.getElementById(el.dataset.from)?.select(); toast('Select the text and copy it'); }
+  },
   'import-days': (el) => { S.importDays = Number(el.dataset.id); render(); },
   'import-chat': () => document.getElementById('chat-file')?.click(),
   async 'run-diag'() {

@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { newId, newToken, hashToken, nowIso, rowToItem } from './db.js';
-import { TYPES, defaultReminders, startOfDay, isValidKey, isCustom, MAX_CUSTOM } from '../public/shared/reminders.js';
+import { TYPES, defaultReminders, startOfDay, isValidKey, isCustom, MAX_CUSTOM, toYmd } from '../public/shared/reminders.js';
 import { extractItems, extractFromChat } from './extract.js';
 import { pushToMember, vapidPublicKey, verifyAction } from './push.js';
 import { buildNotification, status as schedulerStatus, dayWord, fmtTime } from './scheduler.js';
@@ -40,7 +40,7 @@ export function createApp(db) {
   });
 
   const SQL = {
-    deviceByToken: 'SELECT m.* FROM devices d JOIN members m ON m.id = d.member_id WHERE d.token_hash = ?',
+    deviceByToken: 'SELECT m.*, d.label AS device_label FROM devices d JOIN members m ON m.id = d.member_id WHERE d.token_hash = ?',
     item: 'SELECT * FROM items WHERE id = ? AND family_id = ?',
     activity: 'INSERT INTO activity(family_id, member_id, text, at) VALUES (?, ?, ?, ?)',
   };
@@ -62,6 +62,8 @@ export function createApp(db) {
     const token = h.startsWith('Bearer ') ? h.slice(7) : '';
     const member = token && (await memberByToken(token));
     if (!member) throw new HttpError(401, 'Not signed in');
+    // A Shortcut key can only add items; it can't read the family's data.
+    if (member.device_label === 'shortcut' && req.originalUrl.split('?')[0] !== '/api/quick-add') throw new HttpError(403, 'This key can only add items');
     req.member = member;
     req.familyId = member.family_id;
     next();
@@ -144,6 +146,7 @@ export function createApp(db) {
       activity,
       vapidPublicKey: vapidPublicKey(),
       aiEnabled: !!config.anthropicKey,
+      hasShortcutKey: !!(await db.get("SELECT 1 AS x FROM devices WHERE member_id = ? AND label = 'shortcut'", [member.id])),
     };
   }
 
@@ -160,7 +163,7 @@ export function createApp(db) {
     '/api/family',
     wrap(async (req, res) => {
       if (!config.allowSignup) throw new HttpError(403, 'New families are disabled on this server');
-      limit('signup:' + req.ip, 5, 3600e3);
+      limit('signup:' + req.ip, config.signupsPerHour, 3600e3);
       const familyName = str(req.body.familyName, 60) || 'Our family';
       const memberName = str(req.body.memberName, 40);
       if (!memberName) throw bad('Your name is required');
@@ -667,6 +670,83 @@ export function createApp(db) {
       }
       if (ids.length) await log(req.familyId, req.member.id, `imported ${ids.length} message${ids.length > 1 ? 's' : ''} from ${chat || 'WhatsApp'}`);
       res.json({ ok: true });
+    })
+  );
+
+  // ---------- iPhone Shortcut / quick add ----------
+  // iOS doesn't let web apps appear in the Share menu, so an iPhone Shortcut posts shared text here
+  // with a personal key. Items are extracted and saved straight away, and the family is notified.
+  app.post(
+    '/api/shortcut-key',
+    auth,
+    wrap(async (req, res) => {
+      const key = newToken();
+      await db.batch([
+        ["DELETE FROM devices WHERE member_id = ? AND label = 'shortcut'", [req.member.id]],
+        ["INSERT INTO devices(token_hash, member_id, created_at, label) VALUES (?, ?, ?, 'shortcut')", [hashToken(key), req.member.id, nowIso()]],
+      ]);
+      const origin = process.env.PUBLIC_URL ? config.publicUrl : `${req.protocol}://${req.get('host')}`;
+      res.json({ key, url: `${origin}/api/quick-add` });
+    })
+  );
+
+  app.delete(
+    '/api/shortcut-key',
+    auth,
+    wrap(async (req, res) => {
+      await db.run("DELETE FROM devices WHERE member_id = ? AND label = 'shortcut'", [req.member.id]);
+      res.json({ ok: true });
+    })
+  );
+
+  const normTitle = (t) => String(t).toLowerCase().replace(/[^a-z0-9]+/g, '');
+
+  app.post(
+    '/api/quick-add',
+    express.text({ type: 'text/*', limit: '64kb' }),
+    auth,
+    wrap(async (req, res) => {
+      limit('quick:' + req.member.id, 60, 3600e3);
+      const raw = typeof req.body === 'string' ? req.body : req.body?.text;
+      const text = typeof raw === 'string' ? raw.trim().slice(0, 6000) : '';
+      if (!text) throw bad('Nothing was shared');
+      const children = await db.all('SELECT id, name, grade, color FROM children WHERE family_id = ? ORDER BY created_at', [req.familyId]);
+      const today = startOfDay(new Date());
+      const { engine, items: found } = await extractItems(text, { children, today });
+      const todayYmd = toYmd(today);
+      const existing = new Set(
+        (await db.all('SELECT title, date FROM items WHERE family_id = ? AND date >= ?', [req.familyId, todayYmd])).map((r) => `${r.date}|${normTitle(r.title)}`)
+      );
+      const fresh = [];
+      for (const f of found) {
+        const k = `${f.date}|${normTitle(f.title)}`;
+        if (f.date < todayYmd || existing.has(k)) continue;
+        existing.add(k);
+        fresh.push(f);
+      }
+      const source = str(req.get('x-source') || req.body?.source, 40) || 'WhatsApp';
+      const t = nowIso();
+      const items = fresh.map((f) => ({
+        ...itemFromBody({ title: f.title, type: f.type, childId: f.childId, date: f.date, time: f.time, location: f.location, source, msg: text }),
+      }));
+      const ids = items.map(() => newId());
+      if (items.length) {
+        await db.batch([
+          ...items.map((it, k) => [
+            INSERT_ITEM,
+            [ids[k], req.familyId, it.childId, it.type, it.title, it.date, it.time, it.location, it.source, it.msg, JSON.stringify(it.rem), req.member.id, t, t],
+          ]),
+          logStmt(req.familyId, req.member.id, `shared ${items.length} item${items.length > 1 ? 's' : ''} from ${source}`),
+        ]);
+        notifyNewItems(req.member, items, ids).catch(() => {});
+      }
+      const when = (it) => `${dayWord(it.date)}${it.time ? ' ' + fmtTime(it.time) : ''}`;
+      const message = items.length
+        ? `Added ${items.length}: ${items.map((it) => `${it.title} (${when(it)})`).join(' · ')}`
+        : found.length
+          ? 'Already in School Tracker, or the date has passed. Nothing new added.'
+          : 'No date found in that message. Open School Tracker to add it by hand.';
+      res.json({ ok: true, engine, added: items.length, message, ids });
     })
   );
 

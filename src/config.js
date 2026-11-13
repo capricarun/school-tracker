@@ -16,6 +16,7 @@ export const config = {
   graceMinutes: Number(process.env.REMINDER_GRACE_MINUTES || 180),
   tickSeconds: Number(process.env.SCHEDULER_TICK_SECONDS || 60),
   allowSignup: process.env.ALLOW_SIGNUP !== 'false',
+  signupsPerHour: Number(process.env.SIGNUPS_PER_HOUR || 5),
   // Attachments are stored in the database (works on Turso too). Photos are shrunk in the browser first.
   maxFileMb: Number(process.env.MAX_FILE_MB || 4),
   maxFamilyStorageMb: Number(process.env.MAX_FAMILY_STORAGE_MB || 300),

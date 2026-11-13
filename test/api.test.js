@@ -166,3 +166,34 @@ test('WhatsApp import: per-message dates, skips seen messages, past items droppe
   assert.equal(r2.body.alreadySeen, 4);
   assert.equal(r2.body.items.length, 0);
 });
+
+test('iPhone Shortcut quick-add: saves items, dedupes, key is add-only', async () => {
+  const a = await call('/api/family', { method: 'POST', body: { memberName: 'A', children: [{ name: 'Aarav', grade: 'Grade 4' }] } });
+  const tok = a.body.token;
+  const k = await call('/api/shortcut-key', { method: 'POST', token: tok });
+  assert.match(k.body.url, /\/api\/quick-add$/);
+  const key = k.body.key;
+  const d = new Date(Date.now() + 6 * 864e5);
+  const msg = `PTM on ${d.getDate()} ${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()]} at 10:30 am in the hall.`;
+
+  // JSON body (what the Shortcut sends)
+  const r1 = await call('/api/quick-add', { method: 'POST', token: key, body: { text: msg } });
+  assert.equal(r1.status, 200);
+  assert.equal(r1.body.added, 1);
+  assert.match(r1.body.message, /^Added 1: Parent–Teacher Meeting \(PTM\)/);
+
+  // plain-text body works too, and the same message is not added twice
+  const r2 = await fetch(`${base}/api/quick-add`, { method: 'POST', headers: { authorization: 'Bearer ' + key, 'content-type': 'text/plain' }, body: msg });
+  assert.equal((await r2.json()).added, 0);
+
+  // no date → nothing added, helpful message
+  const r3 = await call('/api/quick-add', { method: 'POST', token: key, body: { text: 'Thank you ma’am' } });
+  assert.match(r3.body.message, /No date found/);
+
+  // the key cannot read family data
+  assert.equal((await call('/api/state', { token: key })).status, 403);
+  const st = await call('/api/state', { token: tok });
+  assert.equal(st.body.items.length, 1);
+  assert.equal(st.body.hasShortcutKey, true);
+  assert.equal(st.body.items[0].source, 'WhatsApp');
+});

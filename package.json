@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test": "TZ=Asia/Kolkata node --test test/*.test.js && TZ=Asia/Kolkata TEST_DB=libsql node --test test/api.test.js",
+    "test": "TZ=Asia/Kolkata SIGNUPS_PER_HOUR=1000 node --test test/*.test.js && TZ=Asia/Kolkata SIGNUPS_PER_HOUR=1000 TEST_DB=libsql node --test test/api.test.js",
     "vapid": "web-push generate-vapid-keys"
   },
   "engines": {
