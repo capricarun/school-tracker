@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { newId, newToken, hashToken, nowIso, rowToItem } from './db.js';
-import { TYPES, REMINDERS, defaultReminders, startOfDay } from '../public/shared/reminders.js';
+import { TYPES, defaultReminders, startOfDay, isValidKey, isCustom, MAX_CUSTOM } from '../public/shared/reminders.js';
 import { extractItems } from './extract.js';
 import { pushToMember, vapidPublicKey, verifyAction } from './push.js';
 import { buildNotification } from './scheduler.js';
@@ -10,7 +10,6 @@ import { config } from './config.js';
 
 const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const COLORS = ['#0E6B5E', '#B4561A', '#1D4E89', '#7A3E9D', '#8A6D00'];
-const REM_KEYS = new Set(REMINDERS.map((r) => r.key));
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -35,7 +34,7 @@ export function createApp(db) {
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader(
       'Content-Security-Policy',
-      "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'"
+      "default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; frame-src 'self' blob:; object-src 'none'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'"
     );
     next();
   });
@@ -88,7 +87,8 @@ export function createApp(db) {
     if (!title) throw bad('title is required');
     let rem = body.rem !== undefined ? body.rem : base.rem;
     if (!Array.isArray(rem)) rem = defaultReminders(type, time);
-    rem = [...new Set(rem.filter((k) => REM_KEYS.has(k)))];
+    rem = [...new Set(rem.filter((k) => typeof k === 'string' && isValidKey(k)))];
+    if (rem.filter(isCustom).length > MAX_CUSTOM) throw bad(`At most ${MAX_CUSTOM} custom reminders per item`);
     return {
       type,
       title,
@@ -111,7 +111,7 @@ export function createApp(db) {
 
   async function familyState(member) {
     const fid = member.family_id;
-    const [family, members, children, items, activity] = await Promise.all([
+    const [family, members, children, items, activity, atts] = await Promise.all([
       db.get('SELECT * FROM families WHERE id = ?', [fid]),
       db.all('SELECT id, name, role, notify, tell_done, created_at FROM members WHERE family_id = ? ORDER BY created_at', [fid]),
       db.all('SELECT id, name, grade, color FROM children WHERE family_id = ? ORDER BY created_at', [fid]),
@@ -121,13 +121,26 @@ export function createApp(db) {
          WHERE a.family_id = ? ORDER BY a.id DESC LIMIT 20`,
         [fid]
       ),
+      db.all(
+        `SELECT a.id, a.item_id, a.kind, a.name, a.type, a.size, a.text, a.created_at, m.name AS by
+         FROM attachments a LEFT JOIN members m ON m.id = a.created_by WHERE a.family_id = ? ORDER BY a.created_at`,
+        [fid]
+      ),
     ]);
+    const attByItem = new Map();
+    for (const a of atts) {
+      if (!attByItem.has(a.item_id)) attByItem.set(a.item_id, []);
+      attByItem.get(a.item_id).push({
+        id: a.id, kind: a.kind, name: a.name, type: a.type, size: Number(a.size), text: a.kind === 'note' ? a.text : undefined,
+        createdAt: a.created_at, by: a.by || null,
+      });
+    }
     return {
       me: { id: member.id, name: member.name, role: member.role, notify: !!member.notify, tellDone: !!member.tell_done },
       family: { id: family.id, name: family.name },
       members: members.map((m) => ({ id: m.id, name: m.name, role: m.role, notify: !!m.notify })),
       children,
-      items: items.map(rowToItem),
+      items: items.map((r) => ({ ...rowToItem(r), attachments: attByItem.get(r.id) || [] })),
       activity,
       vapidPublicKey: vapidPublicKey(),
       aiEnabled: !!config.anthropicKey,
@@ -377,6 +390,7 @@ export function createApp(db) {
         ['DELETE FROM items WHERE id = ?', [row.id]],
         ['DELETE FROM sent WHERE item_id = ?', [row.id]],
         ['DELETE FROM snoozes WHERE item_id = ?', [row.id]],
+        ['DELETE FROM attachments WHERE item_id = ?', [row.id]],
         logStmt(req.familyId, req.member.id, `deleted “${row.title}”`),
       ]);
       res.json({ ok: true });
@@ -474,6 +488,95 @@ export function createApp(db) {
     wrap(async (req, res) => {
       const token = (req.get('authorization') || '').slice(7);
       await db.run('DELETE FROM devices WHERE token_hash = ?', [hashToken(token)]);
+      res.json({ ok: true });
+    })
+  );
+
+  // ---------- attachments ----------
+  const SAFE_INLINE = /^(image\/(png|jpeg|gif|webp)|application\/pdf|text\/plain)$/;
+  async function assertRoom(familyId, adding) {
+    const { used } = await db.get('SELECT COALESCE(SUM(size), 0) AS used FROM attachments WHERE family_id = ?', [familyId]);
+    if (Number(used) + adding > config.maxFamilyStorageMb * 1048576) {
+      throw new HttpError(413, `Storage is full (${config.maxFamilyStorageMb} MB). Delete old attachments first.`);
+    }
+  }
+
+  app.post(
+    '/api/items/:id/attachments',
+    auth,
+    express.raw({ type: () => true, limit: `${config.maxFileMb + 1}mb` }),
+    wrap(async (req, res) => {
+      const row = await getItem(req.params.id, req.familyId);
+      if (!row) throw new HttpError(404, 'Not found');
+      const data = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+      if (!data.length) throw bad('Empty file');
+      if (data.length > config.maxFileMb * 1048576) throw new HttpError(413, `Files can be up to ${config.maxFileMb} MB`);
+      await assertRoom(req.familyId, data.length);
+      let name = 'file';
+      try { name = decodeURIComponent(req.get('x-filename') || 'file'); } catch { /* keep default */ }
+      name = name.replace(/[\\/\r\n"]/g, '_').slice(0, 120) || 'file';
+      const type = String(req.get('content-type') || 'application/octet-stream').split(';')[0].trim().slice(0, 100);
+      const id = newId();
+      await db.batch([
+        [
+          'INSERT INTO attachments(id, item_id, family_id, kind, name, type, size, data, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [id, row.id, req.familyId, 'file', name, type, data.length, data, req.member.id, nowIso()],
+        ],
+        logStmt(req.familyId, req.member.id, `attached “${name}” to “${row.title}”`),
+      ]);
+      res.json({ id });
+    })
+  );
+
+  app.post(
+    '/api/items/:id/notes',
+    auth,
+    wrap(async (req, res) => {
+      const row = await getItem(req.params.id, req.familyId);
+      if (!row) throw new HttpError(404, 'Not found');
+      const text = typeof req.body.text === 'string' ? req.body.text.slice(0, 20000) : '';
+      if (!text.trim()) throw bad('Nothing to save');
+      const name = str(req.body.name, 80) || 'Pasted note';
+      const size = Buffer.byteLength(text);
+      await assertRoom(req.familyId, size);
+      const id = newId();
+      await db.batch([
+        [
+          'INSERT INTO attachments(id, item_id, family_id, kind, name, type, size, text, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [id, row.id, req.familyId, 'note', name, 'text/plain', size, text, req.member.id, nowIso()],
+        ],
+        logStmt(req.familyId, req.member.id, `added a note to “${row.title}”`),
+      ]);
+      res.json({ id });
+    })
+  );
+
+  app.get(
+    '/api/attachments/:id',
+    auth,
+    wrap(async (req, res) => {
+      const a = await db.get('SELECT * FROM attachments WHERE id = ? AND family_id = ?', [req.params.id, req.familyId]);
+      if (!a) throw new HttpError(404, 'Not found');
+      const body = a.kind === 'note' ? Buffer.from(a.text || '', 'utf8') : Buffer.from(a.data);
+      const inline = SAFE_INLINE.test(a.type);
+      res.setHeader('Content-Type', inline ? (a.kind === 'note' ? 'text/plain; charset=utf-8' : a.type) : 'application/octet-stream');
+      res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(a.name)}`);
+      res.setHeader('Cache-Control', 'private, max-age=3600');
+      res.setHeader('Content-Security-Policy', "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox");
+      res.end(body);
+    })
+  );
+
+  app.delete(
+    '/api/attachments/:id',
+    auth,
+    wrap(async (req, res) => {
+      const a = await db.get('SELECT id, name FROM attachments WHERE id = ? AND family_id = ?', [req.params.id, req.familyId]);
+      if (!a) throw new HttpError(404, 'Not found');
+      await db.batch([
+        ['DELETE FROM attachments WHERE id = ?', [a.id]],
+        logStmt(req.familyId, req.member.id, `removed attachment “${a.name}”`),
+      ]);
       res.json({ ok: true });
     })
   );

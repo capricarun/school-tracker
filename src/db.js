@@ -40,6 +40,14 @@ const SCHEMA = `
   CREATE TABLE IF NOT EXISTS snoozes (
     id INTEGER PRIMARY KEY AUTOINCREMENT, item_id TEXT NOT NULL, member_id TEXT NOT NULL,
     at TEXT NOT NULL, sent INTEGER NOT NULL DEFAULT 0);
+  CREATE TABLE IF NOT EXISTS attachments (
+    id TEXT PRIMARY KEY, item_id TEXT NOT NULL, family_id TEXT NOT NULL,
+    kind TEXT NOT NULL,            -- 'file' (data in BLOB) or 'note' (pasted text)
+    name TEXT NOT NULL, type TEXT NOT NULL, size INTEGER NOT NULL,
+    data BLOB, text TEXT,
+    created_by TEXT, created_at TEXT NOT NULL);
+  CREATE INDEX IF NOT EXISTS attachments_item ON attachments(item_id);
+  CREATE INDEX IF NOT EXISTS attachments_family ON attachments(family_id);
   CREATE TABLE IF NOT EXISTS activity (
     id INTEGER PRIMARY KEY AUTOINCREMENT, family_id TEXT NOT NULL, member_id TEXT, text TEXT NOT NULL, at TEXT NOT NULL);
 `;

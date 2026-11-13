@@ -123,8 +123,11 @@ function childForWholeMessage(whole, children) {
 export function parseMessage(text, { children = [], today = startOfDay(new Date()), fallbackChildId = null } = {}) {
   const whole = String(text || '');
   const childAll = childForWholeMessage(whole, children) || fallbackChildId || children[0]?.id || null;
+  // One item per line; a line holding several sentences is split so each dated sentence
+  // becomes its own item ("Pay fees by 25/11. Annual day on 28th Nov at 5 pm.").
   const lines = whole
     .split(/\n+/)
+    .flatMap((l) => l.split(/(?<=[.!?])\s+(?=[A-Z₹0-9])/))
     .map((s) => s.trim())
     .filter(Boolean);
   const out = [];

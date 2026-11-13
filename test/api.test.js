@@ -89,3 +89,49 @@ test('family flow: create, invite partner, extract, save, done, reminders', asyn
   const c = await call('/api/family', { method: 'POST', body: { memberName: 'Eve' } });
   assert.equal((await call('/api/items/' + id, { method: 'PATCH', token: c.body.token, body: { title: 'hacked' } })).status, 404);
 });
+
+test('custom reminders and attachments', async () => {
+  const a = await call('/api/family', { method: 'POST', body: { memberName: 'A', children: [{ name: 'K' }] } });
+  const tok = a.body.token;
+  const date = new Date(Date.now() + 5 * 864e5).toISOString().slice(0, 10);
+  const { body: { ids: [id] } } = await call('/api/items', { method: 'POST', token: tok, body: { title: 'Trip', type: 'Event', date } });
+
+  // custom reminder: valid key accepted, junk rejected silently, fires at its time
+  const at = new Date(Date.now() + 3600e3);
+  const pad = (n) => String(n).padStart(2, '0');
+  const key = `c:${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}T${pad(at.getHours())}:${pad(at.getMinutes())}`;
+  assert.equal((await call('/api/items/' + id, { method: 'PATCH', token: tok, body: { rem: ['1d', key, 'c:bad', 'x'] } })).status, 200);
+  let st = await call('/api/state', { token: tok });
+  assert.deepEqual(st.body.items.find((i) => i.id === id).rem, ['1d', key]);
+  const fire = new Date(at.getTime() + 60e3);
+  assert.ok((await dueReminders(db, fire)).some((d) => d.item.id === id && d.key === key));
+
+  // binary upload round-trip
+  const bytes = Buffer.from([0x25, 0x50, 0x44, 0x46, 0, 1, 2, 255, 254]);
+  const up = await fetch(`${base}/api/items/${id}/attachments`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer ' + tok, 'content-type': 'application/pdf', 'x-filename': encodeURIComponent('Circular – Nov.pdf') },
+    body: bytes,
+  });
+  assert.equal(up.status, 200);
+  const attId = (await up.json()).id;
+  const note = await call(`/api/items/${id}/notes`, { method: 'POST', token: tok, body: { text: 'Bring water bottle\nand cap' } });
+  assert.equal(note.status, 200);
+  st = await call('/api/state', { token: tok });
+  const atts = st.body.items.find((i) => i.id === id).attachments;
+  assert.deepEqual(atts.map((x) => [x.kind, x.name, x.size]), [['file', 'Circular – Nov.pdf', 9], ['note', 'Pasted note', 26]]);
+  assert.equal(atts[1].text, 'Bring water bottle\nand cap');
+
+  const got = await fetch(`${base}/api/attachments/${attId}`, { headers: { authorization: 'Bearer ' + tok } });
+  assert.equal(got.headers.get('content-type'), 'application/pdf');
+  assert.deepEqual(Buffer.from(await got.arrayBuffer()), bytes);
+
+  // another family cannot read or delete it
+  const b = await call('/api/family', { method: 'POST', body: { memberName: 'B' } });
+  assert.equal((await fetch(`${base}/api/attachments/${attId}`, { headers: { authorization: 'Bearer ' + b.body.token } })).status, 404);
+  assert.equal((await call('/api/attachments/' + attId, { method: 'DELETE', token: b.body.token })).status, 404);
+
+  assert.equal((await call('/api/attachments/' + attId, { method: 'DELETE', token: tok })).status, 200);
+  st = await call('/api/state', { token: tok });
+  assert.equal(st.body.items.find((i) => i.id === id).attachments.length, 1);
+});

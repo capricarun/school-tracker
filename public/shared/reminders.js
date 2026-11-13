@@ -52,8 +52,17 @@ export function defaultReminders(type, time) {
   return r;
 }
 
+// Custom reminders are stored as 'c:YYYY-MM-DDTHH:MM' (local time).
+export const CUSTOM_RX = /^c:(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/;
+export const MAX_CUSTOM = 10;
+export const isCustom = (key) => CUSTOM_RX.test(key);
+export const customKey = (ymd, hm) => `c:${ymd}T${hm}`;
+export const isValidKey = (key) => REMINDERS.some((r) => r.key === key) || isCustom(key);
+
 /** When reminder `key` fires for an item, or null if it can't (e.g. 1h with no time). */
 export function reminderAt(item, key) {
+  const c = CUSTOM_RX.exec(key);
+  if (c) return new Date(+c[1], +c[2] - 1, +c[3], +c[4], +c[5], 0, 0);
   if (!item.date) return null;
   let b = parseYmd(item.date);
   switch (key) {

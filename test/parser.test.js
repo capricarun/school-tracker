@@ -62,3 +62,11 @@ test('child by name wins over grade', () => {
   assert.equal(it.childId, 'm');
   assert.equal(it.type, 'Task');
 });
+
+test('several dated sentences on one line become separate items', () => {
+  const items = parseMessage('Kindly pay term 2 fees by 25/11. Annual day on 28th Nov at 5 pm in the auditorium.', { children, today });
+  assert.deepEqual(items.map((i) => [i.title, i.date, i.time]), [
+    ['Pay term 2 fees', '2026-11-25', ''],
+    ['Annual day', '2026-11-28', '17:00'],
+  ]);
+});

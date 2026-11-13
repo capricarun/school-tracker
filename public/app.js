@@ -1,5 +1,6 @@
 import {
   TYPES, REMINDERS, reminderAt, upcomingReminders, daysFromToday, parseYmd, defaultReminders, toYmd,
+  isCustom, MAX_CUSTOM, pad,
 } from './shared/reminders.js';
 
 /* ---------------- helpers ---------------- */
@@ -43,6 +44,10 @@ const ICON = {
   spark: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/></svg>',
   pin: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s-7-6.2-7-11a7 7 0 1 1 14 0c0 4.8-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg>',
   msg: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+  clip: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.4 11.1l-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg>',
+  file: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></svg>',
+  note: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 4h8M6 4h12a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/><path d="M8 10h8M8 14h8M8 18h5"/></svg>',
+  close: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>',
   share: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M7 8l5-5 5 5"/><path d="M5 13v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6"/></svg>',
 };
 
@@ -69,7 +74,13 @@ const S = {
   addChild: { name: '', grade: '' },
   confirmDelete: false,
   error: '',
+  customRem: '', // datetime-local value for a new custom reminder on the open item
+  noteDraft: null, // text being pasted as a note on the open item
+  uploading: 0,
+  viewer: null, // { att, url, text, confirmDelete }
 };
+const blobUrls = new Map(); // attachment id -> object URL (thumbnails + viewer)
+const blobData = new Map(); // attachment id -> Blob (for Share)
 
 async function api(path, { method = 'GET', body } = {}) {
   const res = await fetch(path, {
@@ -86,6 +97,31 @@ async function api(path, { method = 'GET', body } = {}) {
   if (!res.ok) throw new Error(json.error || 'Request failed');
   return json;
 }
+async function fetchBlob(id) {
+  if (blobUrls.has(id)) return blobUrls.get(id);
+  const res = await fetch('/api/attachments/' + id, { headers: { authorization: 'Bearer ' + S.token } });
+  if (!res.ok) throw new Error('Could not open the file');
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  blobUrls.set(id, url);
+  blobData.set(id, blob);
+  return url;
+}
+const fmtSize = (n) => (n < 1024 ? n + ' B' : n < 1048576 ? Math.round(n / 1024) + ' KB' : (n / 1048576).toFixed(1) + ' MB');
+const isImage = (a) => a.kind === 'file' && /^image\/(png|jpeg|gif|webp)$/.test(a.type);
+const isPdf = (a) => a.kind === 'file' && a.type === 'application/pdf';
+const toLocalInput = (d) => `${toYmd(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+function defaultCustomFor(it) {
+  const d = parseYmd(it.date);
+  d.setDate(d.getDate() - 1);
+  d.setHours(18, 0, 0, 0);
+  if (d > new Date()) return toLocalInput(d);
+  const n = new Date(Date.now() + 3600e3);
+  n.setMinutes(0, 0, 0);
+  return toLocalInput(n);
+}
+const fmtWhen = (d) => `${dayLabel(d)}, ${fmtClock(d)}`;
+
 function setToken(t) {
   S.token = t;
   store.set(TOKEN_KEY, t);
@@ -122,8 +158,11 @@ function onRoute() {
   S.route = route || 'home';
   S.param = param || null;
   S.confirmDelete = false;
+  S.customRem = '';
+  S.noteDraft = null;
+  S.viewer = null;
   if (S.route === 'join' && S.param) loadInvite(S.param);
-  else if (S.token && S.data && (S.route === 'home' || S.route === 'family')) refresh();
+  else if (S.token && S.data && (S.route === 'home' || S.route === 'family' || (S.route === 'item' && !itemOf(S.param)))) refresh();
   render();
   window.scrollTo(0, 0);
 }
@@ -203,7 +242,7 @@ function itemCard(it) {
       </span>
       <span class="item-title">${esc(it.title)}</span>
       <span class="when ${whenCls}">${esc(when)}</span>
-      <span class="next">${ICON.bellSm}${esc(next)}</span>
+      <span class="next">${ICON.bellSm}${esc(next)}${it.attachments?.length ? `<span class="row" style="gap:4px;margin-left:auto">${ICON.clip}${it.attachments.length}</span>` : ''}</span>
     </button></div>`;
 }
 
@@ -308,8 +347,69 @@ function addScreen() {
   </main>`;
 }
 
+function draftRems(d) {
+  const r = defaultReminders(d.type, d.time);
+  if (d.custom && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(d.custom)) r.push('c:' + d.custom);
+  return r;
+}
+
+function attachmentsSection(it) {
+  const atts = it.attachments || [];
+  return `<section class="card stack" id="attachments" style="gap:12px">
+    <div class="row between" style="align-items:baseline"><h2>Documents &amp; notes</h2><span class="small">${atts.length ? atts.length + ' saved' : 'Shared with your family'}</span></div>
+    ${atts.length ? `<div class="att-list">${atts.map((a) => {
+      const thumb = isImage(a) && blobUrls.has(a.id)
+        ? `<img src="${blobUrls.get(a.id)}" alt="">`
+        : a.kind === 'note' ? ICON.note : ICON.file;
+      const sub = a.kind === 'note' ? esc((a.text || '').slice(0, 60)) : `${esc(isPdf(a) ? 'PDF' : (a.type.split('/')[1] || 'file').toUpperCase())} · ${fmtSize(a.size)}`;
+      return `<button class="att" data-act="open-att" data-id="${a.id}">
+        <span class="att-thumb">${thumb}</span>
+        <span class="grow" style="text-align:left;min-width:0"><b class="ellipsis">${esc(a.name)}</b><span class="small ellipsis" style="display:block">${sub}</span></span></button>`;
+    }).join('')}</div>` : ''}
+    ${S.noteDraft !== null ? `<div class="stack" style="gap:8px">
+      <label for="note-text">Paste or type the content</label>
+      <textarea id="note-text" data-bind="noteDraft" style="min-height:160px" placeholder="e.g. the full circular, a link, instructions">${esc(S.noteDraft)}</textarea>
+      <div class="row"><button class="btn small primary" data-act="note-save">Save note</button><button class="btn small" data-act="note-cancel">Cancel</button></div>
+    </div>` : `<div class="row wrap">
+      <button class="btn small" data-act="attach">${ICON.clip} Attach file or photo</button>
+      <button class="btn small" data-act="note-start">Paste content</button>
+    </div>
+    <input type="file" id="file-input" multiple accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv" hidden>
+    <p class="small" style="margin:0">${S.uploading ? `<span class="row" style="gap:8px"><span class="spinner" aria-hidden="true"></span>Uploading ${S.uploading}…</span>` : 'Photos, PDFs and documents up to 4 MB each. You can also paste a screenshot here.'}</p>`}
+  </section>`;
+}
+
+function viewerOverlay() {
+  const v = S.viewer;
+  if (!v) return '';
+  const a = v.att;
+  let body;
+  if (v.loading) body = '<div class="center" style="min-height:40vh">Opening…</div>';
+  else if (v.error) body = `<p class="sub" style="padding:20px">${esc(v.error)}</p>`;
+  else if (a.kind === 'note') body = `<pre class="viewer-text">${esc(a.text || '')}</pre>`;
+  else if (isImage(a)) body = `<div class="viewer-img"><img src="${v.url}" alt="${esc(a.name)}"></div>`;
+  else if (isPdf(a)) body = `<iframe class="viewer-pdf" src="${v.url}" title="${esc(a.name)}"></iframe>`;
+  else body = `<div class="center stack" style="min-height:40vh;text-align:center;align-items:center">${ICON.file}<p class="sub">No preview for this file type.<br>Use Download or Open to view it.</p></div>`;
+  const canShare = !!(navigator.canShare && v.file && navigator.canShare({ files: [v.file] }));
+  return `<div class="viewer" role="dialog" aria-modal="true" aria-label="${esc(a.name)}">
+    <header class="viewer-bar">
+      <button class="icon-btn" data-act="viewer-close" aria-label="Close">${ICON.close}</button>
+      <span class="grow" style="min-width:0"><b class="ellipsis" style="display:block">${esc(a.name)}</b>
+        <span class="small">${a.by ? 'Added by ' + esc(a.by) + ' · ' : ''}${esc(dayLabel(new Date(a.createdAt)))}${a.kind === 'file' ? ' · ' + fmtSize(a.size) : ''}</span></span>
+    </header>
+    <div class="viewer-body">${body}</div>
+    <footer class="viewer-bar">
+      ${a.kind === 'note'
+        ? '<button class="btn small" data-act="viewer-copy">Copy text</button>'
+        : v.url ? `<a class="btn small" href="${v.url}" download="${esc(a.name)}">Download</a><a class="btn small" href="${v.url}" target="_blank" rel="noopener">Open</a>` : ''}
+      ${canShare || a.kind === 'note' && navigator.share ? '<button class="btn small" data-act="viewer-share">Share…</button>' : ''}
+      <button class="btn small danger" data-act="viewer-delete" style="margin-left:auto">${v.confirmDelete ? 'Tap again to delete' : 'Delete'}</button>
+    </footer>
+  </div>`;
+}
+
 function draftCard(d, i) {
-  const fr = upcomingReminders({ date: d.date, time: d.time, rem: defaultReminders(d.type, d.time) });
+  const fr = upcomingReminders({ date: d.date, time: d.time, rem: draftRems(d) });
   const remText = !d.date
     ? 'Pick a date to schedule reminders'
     : fr.length
@@ -331,6 +431,7 @@ function draftCard(d, i) {
       <div class="field"><label for="h${i}">Time (optional)</label><input type="time" id="h${i}" data-bind="draft.${i}.time" data-rerender value="${esc(d.time)}"></div>
     </div>
     <div class="field"><label for="l${i}">Where (optional)</label><input type="text" id="l${i}" data-bind="draft.${i}.location" value="${esc(d.location)}"></div>
+    <div class="field"><label for="c${i}">Extra reminder at (optional)</label><input type="datetime-local" id="c${i}" data-bind="draft.${i}.custom" data-rerender value="${esc(d.custom || '')}"></div>
     <div class="hint" style="font-size:13px">${ICON.bellSm}<span>${esc(remText)}</span></div>
     ${d.line ? `<p class="quote">“${esc(d.line)}”</p>` : ''}
   </div>`;
@@ -361,6 +462,8 @@ function itemScreen() {
   const dd = daysFromToday(it.date);
   const now = new Date();
   const others = S.data.members.filter((m) => m.id !== S.data.me.id && m.notify).map((m) => m.name);
+  const customs = it.rem.filter(isCustom).map((key) => ({ key, at: reminderAt(it, key) })).sort((a, b) => a.at - b.at);
+  if (!S.customRem) S.customRem = defaultCustomFor(it);
   const rems = REMINDERS.map((r) => {
     const at = reminderAt(it, r.key);
     const on = it.rem.includes(r.key);
@@ -390,7 +493,15 @@ function itemScreen() {
       <div class="row between" style="padding:12px 0 6px;align-items:baseline"><h2>Reminders</h2>
         <span class="small">${others.length ? 'to you &amp; ' + esc(others.join(', ')) : 'to you'}</span></div>
       ${rems}
+      ${customs.map((c) => `<div class="toggle" style="cursor:default">
+        <span class="t-label"><b>Custom</b><small>${c.at <= now ? 'Already passed · ' : ''}${esc(fmtWhen(c.at))}</small></span>
+        <button class="btn small danger" data-act="del-custom" data-k="${esc(c.key)}" aria-label="Remove custom reminder ${esc(fmtWhen(c.at))}">Remove</button></div>`).join('')}
+      ${customs.length < MAX_CUSTOM ? `<div class="stack" style="padding:12px 0 14px;gap:8px">
+        <label for="custom-rem">Add a reminder at a date and time you choose</label>
+        <div class="row"><input type="datetime-local" id="custom-rem" data-bind="customRem" value="${esc(S.customRem)}" class="grow">
+        <button class="btn small primary" data-act="add-custom">Add</button></div></div>` : ''}
     </section>
+    ${attachmentsSection(it)}
     <div class="row">
       <button class="btn grow" data-act="snooze">Remind me in 1 hr</button>
       ${it.done
@@ -508,8 +619,11 @@ function render() {
     const screen = { home: homeScreen, add: addScreen, review: reviewScreen, item: itemScreen, family: familyScreen }[S.route] || homeScreen;
     html = screen() + nav();
   }
+  if (S.data && S.token) html += viewerOverlay();
   if (S.toast) html += `<div class="toast" role="status">${esc(S.toast)}</div>`;
   $app.innerHTML = html;
+  document.body.style.overflow = S.viewer ? 'hidden' : '';
+  loadThumbs();
 
   if (focusId) {
     const el = document.getElementById(focusId);
@@ -518,6 +632,87 @@ function render() {
       if (sel && 'setSelectionRange' in el) try { el.setSelectionRange(sel[0], sel[1]); } catch { /* date inputs */ }
     }
   }
+}
+
+/* ---------------- attachments ---------------- */
+let thumbBusy = false;
+async function loadThumbs() {
+  if (thumbBusy || S.route !== 'item') return;
+  const it = itemOf(S.param);
+  const todo = (it?.attachments || []).filter((a) => isImage(a) && !blobUrls.has(a.id));
+  if (!todo.length) return;
+  thumbBusy = true;
+  for (const a of todo) await fetchBlob(a.id).catch(() => {});
+  thumbBusy = false;
+  render();
+}
+
+const MAX_BYTES = 4 * 1048576;
+async function shrinkImage(file) {
+  // Phone photos are often 3-8 MB; 1600px JPEG keeps them readable and well under the limit.
+  if (!/^image\/(jpeg|png|webp|heic|heif)$/i.test(file.type) && !/\.(heic|heif)$/i.test(file.name)) return file;
+  try {
+    const bmp = await createImageBitmap(file);
+    const scale = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+    if (scale === 1 && file.size < 1048576 && /jpeg|png|webp/.test(file.type)) return file;
+    const c = document.createElement('canvas');
+    c.width = Math.round(bmp.width * scale);
+    c.height = Math.round(bmp.height * scale);
+    c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+    const blob = await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.82));
+    const base = file.name.replace(/\.[^.]+$/, '') || 'photo';
+    return blob ? new File([blob], base + '.jpg', { type: 'image/jpeg' }) : file;
+  } catch {
+    return file;
+  }
+}
+
+async function uploadFiles(itemId, files) {
+  const list = [...files];
+  if (!list.length) return;
+  S.uploading = list.length;
+  render();
+  let ok = 0;
+  for (const f of list) {
+    const file = await shrinkImage(f);
+    if (file.size > MAX_BYTES) { toast(`${f.name} is larger than 4 MB`); S.uploading--; continue; }
+    try {
+      const res = await fetch(`/api/items/${itemId}/attachments`, {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer ' + S.token,
+          'content-type': file.type && file.type !== 'application/json' ? file.type : 'application/octet-stream',
+          'x-filename': encodeURIComponent(file.name || 'file'),
+        },
+        body: file,
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j.error || 'Upload failed');
+      ok++;
+    } catch (e) {
+      toast(e.message);
+    }
+    S.uploading--;
+    render();
+  }
+  S.uploading = 0;
+  await refresh();
+  if (ok) toast(`${ok} file${ok > 1 ? 's' : ''} attached · your family can see ${ok > 1 ? 'them' : 'it'}`);
+}
+
+async function openViewer(att) {
+  S.viewer = { att, loading: att.kind === 'file' };
+  render();
+  if (att.kind !== 'file') return;
+  try {
+    const url = await fetchBlob(att.id);
+    const blob = blobData.get(att.id);
+    if (S.viewer?.att.id !== att.id) return;
+    S.viewer = { att, url, file: new File([blob], att.name, { type: att.type }) };
+  } catch (e) {
+    S.viewer = { att, error: e.message };
+  }
+  render();
 }
 
 /* ---------------- actions ---------------- */
@@ -611,11 +806,11 @@ const actions = {
         body: {
           items: list.map((d) => ({
             title: d.title.trim(), type: d.type, childId: d.childId, date: d.date, time: d.time, location: d.location,
-            source: S.src, msg: d.line || S.text.slice(0, 2000), rem: defaultReminders(d.type, d.time),
+            source: S.src, msg: d.line || S.text.slice(0, 2000), rem: draftRems(d),
           })),
         },
       });
-      const n = list.reduce((c, d) => c + upcomingReminders({ date: d.date, time: d.time, rem: defaultReminders(d.type, d.time) }).length, 0);
+      const n = list.reduce((c, d) => c + upcomingReminders({ date: d.date, time: d.time, rem: draftRems(d) }).length, 0);
       S.drafts = [];
       S.text = '';
       S.filter = 'all';
@@ -631,6 +826,71 @@ const actions = {
     }
   },
   'item-set': (el) => patchItem(S.param, { [el.dataset.k]: el.dataset.v }),
+  'add-custom'() {
+    const it = itemOf(S.param);
+    const v = (document.getElementById('custom-rem')?.value || S.customRem || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(v)) { toast('Pick a date and time'); return; }
+    const [dd, tt] = v.split('T');
+    const at = new Date(...dd.split('-').map((x, i) => (i === 1 ? x - 1 : +x)), ...tt.split(':').map(Number));
+    if (at <= new Date()) { toast('Pick a time in the future'); return; }
+    const key = 'c:' + v;
+    if (it.rem.includes(key)) { toast('That reminder is already set'); return; }
+    S.customRem = '';
+    patchItem(it.id, { rem: [...it.rem, key] });
+    toast(`Reminder set for ${fmtWhen(at)}`);
+  },
+  'del-custom': (el) => {
+    const it = itemOf(S.param);
+    patchItem(it.id, { rem: it.rem.filter((k) => k !== el.dataset.k) });
+  },
+  attach: () => document.getElementById('file-input')?.click(),
+  'note-start'() {
+    S.noteDraft = '';
+    render();
+    document.getElementById('note-text')?.focus();
+    navigator.clipboard?.readText?.().then((t) => {
+      if (t && S.noteDraft === '') { S.noteDraft = t; render(); }
+    }).catch(() => {});
+  },
+  'note-cancel': () => { S.noteDraft = null; render(); },
+  async 'note-save'() {
+    const text = (document.getElementById('note-text')?.value ?? S.noteDraft ?? '').trim();
+    if (!text) { toast('Paste or type something first'); return; }
+    const first = text.split('\n')[0].trim();
+    try {
+      await api(`/api/items/${S.param}/notes`, { method: 'POST', body: { text, name: first.length > 3 ? first.slice(0, 60) : 'Pasted note' } });
+      S.noteDraft = null;
+      await refresh();
+      toast('Note saved');
+    } catch (e) { toast(e.message); }
+  },
+  'open-att'(el) {
+    const att = itemOf(S.param)?.attachments.find((a) => a.id === el.dataset.id);
+    if (att) openViewer(att);
+  },
+  'viewer-close': () => { S.viewer = null; render(); },
+  async 'viewer-copy'() {
+    try { await navigator.clipboard.writeText(S.viewer.att.text || ''); toast('Copied'); } catch { toast('Select the text and copy it'); }
+  },
+  async 'viewer-share'() {
+    const v = S.viewer;
+    try {
+      if (v.att.kind === 'note') await navigator.share({ title: v.att.name, text: v.att.text });
+      else await navigator.share({ files: [v.file], title: v.att.name });
+    } catch { /* cancelled */ }
+  },
+  async 'viewer-delete'() {
+    const v = S.viewer;
+    if (!v.confirmDelete) { v.confirmDelete = true; render(); return; }
+    try {
+      await api('/api/attachments/' + v.att.id, { method: 'DELETE' });
+      const url = blobUrls.get(v.att.id);
+      if (url) { URL.revokeObjectURL(url); blobUrls.delete(v.att.id); blobData.delete(v.att.id); }
+      S.viewer = null;
+      await refresh();
+      toast('Deleted');
+    } catch (e) { toast(e.message); }
+  },
   'toggle-rem'(el) {
     const it = itemOf(S.param);
     const k = el.dataset.k;
@@ -755,6 +1015,24 @@ document.addEventListener('change', (e) => {
     if (k === 'title' && !el.value.trim()) return;
     patchItem(S.param, { [k]: el.value });
   }
+});
+document.addEventListener('change', (e) => {
+  if (e.target.id === 'file-input' && S.route === 'item') {
+    uploadFiles(S.param, e.target.files);
+    e.target.value = '';
+  }
+});
+// Paste a screenshot or file anywhere on an item's screen to attach it.
+document.addEventListener('paste', (e) => {
+  if (S.route !== 'item' || !S.token) return;
+  const files = [...(e.clipboardData?.files || [])];
+  if (files.length) {
+    e.preventDefault();
+    uploadFiles(S.param, files);
+  }
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && S.viewer) { S.viewer = null; render(); }
 });
 document.addEventListener('focusin', (e) => { if (e.target.dataset.select !== undefined) e.target.select(); });
 navigator.serviceWorker?.addEventListener('message', (e) => { if (e.data?.type === 'refresh') refresh(); });

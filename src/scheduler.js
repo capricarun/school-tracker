@@ -46,9 +46,11 @@ export async function dueReminders(db, now = new Date()) {
   // Nothing older than a week can still have a reminder due.
   const since = new Date(now.getTime() - 7 * 864e5).toISOString().slice(0, 10);
   const [rows, members, sentRows, children] = await Promise.all([
-    db.all('SELECT * FROM items WHERE done = 0 AND date >= ?', [since]),
+    // Custom reminders can be set after the item's date, so keep those items too.
+    db.all(`SELECT * FROM items WHERE done = 0 AND (date >= ? OR rem LIKE '%"c:%')`, [since]),
     db.all('SELECT id, family_id FROM members WHERE notify = 1'),
-    db.all('SELECT s.item_id, s.rem_key, s.member_id FROM sent s JOIN items i ON i.id = s.item_id WHERE i.done = 0 AND i.date >= ?', [since]),
+    db.all(`SELECT s.item_id, s.rem_key, s.member_id FROM sent s JOIN items i ON i.id = s.item_id
+             WHERE i.done = 0 AND (i.date >= ? OR i.rem LIKE '%"c:%')`, [since]),
     db.all('SELECT * FROM children'),
   ]);
   const byFamily = new Map();
