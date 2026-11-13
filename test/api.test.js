@@ -212,3 +212,41 @@ test('iPhone Shortcut quick-add: saves items, dedupes, key is add-only', async (
   assert.equal((await call('/api/state', { token: tok })).body.items.find((i) => i.id === und.id).noDate, false);
   assert.equal(st.body.items[0].source, 'WhatsApp');
 });
+
+test('Shortcut form upload: text + photo are saved together; photo-only share; links kept', async () => {
+  const a = await call('/api/family', { method: 'POST', body: { memberName: 'P', children: [{ name: 'K' }] } });
+  const tok = a.body.token;
+  const key = (await call('/api/shortcut-key', { method: 'POST', token: tok })).body.key;
+  const png = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000000', 'hex');
+  const send = async (fields) => {
+    const fd = new FormData();
+    for (const [k, v] of fields) v instanceof Blob ? fd.append(k, v, 'IMG_0042.png') : fd.append(k, String(v));
+    const r = await fetch(`${base}/api/quick-add`, { method: 'POST', headers: { authorization: 'Bearer ' + key }, body: fd });
+    return { status: r.status, body: await r.json() };
+  };
+  const d = new Date(Date.now() + 9 * 864e5);
+  const text = `Science exhibition on ${d.getDate()}/${d.getMonth() + 1}/${d.getFullYear()}. Register here: https://forms.example.org/expo?id=7`;
+
+  const r1 = await send([['text', text], ['photo', new Blob([png], { type: 'image/png' })]]);
+  assert.equal(r1.status, 200);
+  assert.equal(r1.body.added, 1);
+  assert.match(r1.body.message, /^Added 1 \(\+ 1 photo\)/);
+
+  // re-sharing the same message + photo adds nothing new
+  const r2 = await send([['text', text], ['photo', new Blob([png], { type: 'image/png' })]]);
+  assert.equal(r2.body.added, 0);
+
+  // photo only → saved as an undated "Photo from WhatsApp" item with the photo attached
+  const r3 = await send([['photo', new Blob([png], { type: 'image/png' })]]);
+  assert.equal(r3.body.added, 1);
+  assert.match(r3.body.message, /^No date in the message \(\+ 1 photo\)/);
+
+  const st = (await call('/api/state', { token: tok })).body;
+  const expo = st.items.find((i) => /exhibition/i.test(i.title));
+  assert.equal(expo.attachments.length, 1);
+  assert.equal(expo.attachments[0].type, 'image/png');
+  assert.match(expo.msg, /https:\/\/forms\.example\.org\/expo\?id=7/);
+  const photo = st.items.find((i) => i.title === 'Photo from WhatsApp');
+  assert.equal(photo.noDate, true);
+  assert.equal(photo.attachments.length, 1);
+});

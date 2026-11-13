@@ -47,6 +47,7 @@ const ICON = {
   spark: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/></svg>',
   pin: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s-7-6.2-7-11a7 7 0 1 1 14 0c0 4.8-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg>',
   msg: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+  link: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>',
   clip: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.4 11.1l-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg>',
   file: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></svg>',
   note: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 4h8M6 4h12a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/><path d="M8 10h8M8 14h8M8 18h5"/></svg>',
@@ -116,8 +117,24 @@ async function fetchBlob(id) {
   blobData.set(id, blob);
   return url;
 }
+const URL_RX = /\bhttps?:\/\/[^\s<>"']+[^\s<>"'.,;:!?)\]]/gi;
+const urlsIn = (text) => [...new Set(String(text || '').match(URL_RX) || [])];
+/** Escape text and turn web links into tappable links. */
+function linkify(text) {
+  return esc(text).replace(/\bhttps?:\/\/[^\s<>"']+[^\s<>"'.,;:!?)\]]/gi, (u) => {
+    const href = u.replace(/&amp;/g, '&');
+    return `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${u}</a>`;
+  });
+}
+function linkLabel(u) {
+  try {
+    const x = new URL(u);
+    const path = (x.pathname + x.search).replace(/\/$/, '');
+    return x.hostname.replace(/^www\./, '') + (path ? (path.length > 24 ? path.slice(0, 24) + '…' : path) : '');
+  } catch { return u.slice(0, 40); }
+}
 const fmtSize = (n) => (n < 1024 ? n + ' B' : n < 1048576 ? Math.round(n / 1024) + ' KB' : (n / 1048576).toFixed(1) + ' MB');
-const isImage = (a) => a.kind === 'file' && /^image\/(png|jpeg|gif|webp)$/.test(a.type);
+const isImage = (a) => a.kind === 'file' && /^image\/(png|jpeg|gif|webp|heic|heif)$/.test(a.type);
 const isPdf = (a) => a.kind === 'file' && a.type === 'application/pdf';
 const toLocalInput = (d) => `${toYmd(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 function defaultCustomFor(it) {
@@ -253,7 +270,7 @@ function itemCard(it) {
       </span>
       <span class="item-title">${esc(it.title)}</span>
       <span class="when ${whenCls}">${esc(when)}</span>
-      <span class="next">${ICON.bellSm}${esc(next)}${it.attachments?.length ? `<span class="row" style="gap:4px;margin-left:auto">${ICON.clip}${it.attachments.length}</span>` : ''}</span>
+      <span class="next">${ICON.bellSm}${esc(next)}${it.attachments?.length || urlsIn(it.msg).length ? `<span class="row" style="gap:8px;margin-left:auto">${urlsIn(it.msg).length ? `<span class="row" style="gap:3px">${ICON.link}${urlsIn(it.msg).length}</span>` : ''}${it.attachments?.length ? `<span class="row" style="gap:3px">${ICON.clip}${it.attachments.length}</span>` : ''}</span>` : ''}</span>
     </button></div>`;
 }
 
@@ -423,7 +440,7 @@ function viewerOverlay() {
   let body;
   if (v.loading) body = '<div class="center" style="min-height:40vh">Opening…</div>';
   else if (v.error) body = `<p class="sub" style="padding:20px">${esc(v.error)}</p>`;
-  else if (a.kind === 'note') body = `<pre class="viewer-text">${esc(a.text || '')}</pre>`;
+  else if (a.kind === 'note') body = `<pre class="viewer-text">${linkify(a.text || '')}</pre>`;
   else if (isImage(a)) body = `<div class="viewer-img"><img src="${v.url}" alt="${esc(a.name)}"></div>`;
   else if (isPdf(a)) body = `<iframe class="viewer-pdf" src="${v.url}" title="${esc(a.name)}"></iframe>`;
   else body = `<div class="center stack" style="min-height:40vh;text-align:center;align-items:center">${ICON.file}<p class="sub">No preview for this file type.<br>Use Download or Open to view it.</p></div>`;
@@ -473,7 +490,7 @@ function draftCard(d, i) {
     <div class="field"><label for="l${i}">Where (optional)</label><input type="text" id="l${i}" data-bind="draft.${i}.location" value="${esc(d.location)}"></div>
     <div class="field"><label for="c${i}">Extra reminder at (optional)</label><input type="datetime-local" id="c${i}" data-bind="draft.${i}.custom" data-rerender value="${esc(d.custom || '')}"></div>
     <div class="hint" style="font-size:13px">${ICON.bellSm}<span>${esc(remText)}</span></div>
-    ${d.line ? `<p class="quote">“${esc(d.line)}”</p>` : ''}
+    ${d.line ? `<p class="quote">“${linkify(d.line)}”</p>` : ''}
   </div>`;
 }
 
@@ -544,6 +561,11 @@ function itemScreen() {
         <div class="rem-add"><input type="datetime-local" id="custom-rem" data-bind="customRem" value="${esc(S.customRem)}">
         <button class="btn small primary" data-act="add-custom">Add reminder</button></div></div>` : ''}
     </section>
+    ${urlsIn(it.msg).length ? `<section class="card stack" style="gap:10px"><h2>Links in the message</h2>
+      ${urlsIn(it.msg).map((u) => `<a class="att" href="${esc(u)}" target="_blank" rel="noopener noreferrer" style="text-decoration:none;color:inherit">
+        <span class="att-thumb">${ICON.link}</span>
+        <span class="grow" style="min-width:0"><b class="ellipsis" style="display:block">${esc(linkLabel(u))}</b><span class="small">Opens in your browser</span></span></a>`).join('')}
+    </section>` : ''}
     ${attachmentsSection(it)}
     <div class="row wrap actions">
       <button class="btn grow" data-act="snooze">Remind me in 1 hr</button>
@@ -551,7 +573,7 @@ function itemScreen() {
         ? `<button class="btn grow" data-act="toggle-done" data-id="${it.id}">Done by ${esc(it.doneBy || '')} · Undo</button>`
         : `<button class="btn primary grow" data-act="toggle-done" data-id="${it.id}">Mark as done</button>`}
     </div>
-    ${it.msg ? `<section class="card sunk stack" style="gap:8px"><span class="eyebrow row" style="font-size:12px;gap:6px">${ICON.msg} Original${it.source ? ' · ' + esc(it.source) : ''}</span><p class="pre">${esc(it.msg)}</p></section>` : ''}
+    ${it.msg ? `<section class="card sunk stack" style="gap:8px"><span class="eyebrow row" style="font-size:12px;gap:6px">${ICON.msg} Original${it.source ? ' · ' + esc(it.source) : ''}</span><p class="pre">${linkify(it.msg)}</p></section>` : ''}
     <button class="btn danger" data-act="delete">${S.confirmDelete ? 'Tap again to delete for everyone' : 'Delete item'}</button>
   </main>`;
 }
@@ -627,15 +649,18 @@ function shareCard() {
       ${copyField('2. Authorization header value', 'Bearer ' + sc.key, 'sc-key')}
       <ol class="steps">
         <li>Open the <b>Shortcuts</b> app → tap <b>+</b> → name it <b>School Tracker</b>.</li>
-        <li>Tap the <b>ⓘ</b> (Details) button → turn on <b>Show in Share Sheet</b>. Tap <b>Receive</b> and choose only <b>Text</b>.</li>
+        <li>Tap the <b>ⓘ</b> (Details) button → turn on <b>Show in Share Sheet</b>. Tap <b>Receive</b> and choose <b>Text</b>, <b>Images</b>, <b>URLs</b> and <b>PDFs</b>.</li>
+        <li>Add the action <b>Get Text from Input</b> (input: <b>Shortcut Input</b>).</li>
+        <li>Add the action <b>Get Images from Input</b> (input: <b>Shortcut Input</b>).</li>
         <li>Add the action <b>Get Contents of URL</b>. Paste value 1 as the URL. Tap the arrow to show more:
           <ul><li><b>Method</b>: POST</li>
           <li><b>Headers</b> → Add new header: key <code>Authorization</code>, text: paste value 2</li>
-          <li><b>Request Body</b>: JSON → Add new field → Text → key <code>text</code>, value: tap and choose <b>Shortcut Input</b></li></ul></li>
+          <li><b>Request Body</b>: <b>Form</b> → Add new field → <b>Text</b> → key <code>text</code>, value: <b>Text</b> (from step 3)</li>
+          <li>Add new field → <b>File</b> → key <code>photo</code>, value: <b>Images</b> (from step 4)</li></ul></li>
         <li>Add the action <b>Get Dictionary Value</b> → Get <b>Value</b> for key <code>message</code> in <b>Contents of URL</b>.</li>
         <li>Add the action <b>Show Notification</b> → tap the text and choose <b>Dictionary Value</b>. Tap <b>Done</b>.</li>
       </ol>
-      <p class="small" style="margin:0"><b>To use it:</b> in WhatsApp, long-press a message → <b>Forward</b> → tap the <b>Share</b> icon (bottom right) → <b>School Tracker</b>. The first time, tap <b>Always Allow</b>.</p>
+      <p class="small" style="margin:0"><b>To use it:</b> in WhatsApp, long-press a message → <b>Forward</b> → tick the photo too if there is one → tap the <b>Share</b> icon (bottom right) → <b>School Tracker</b>. The first time, tap <b>Always Allow</b>. Links in the message become tappable in the app, and photos are saved under <b>Documents &amp; notes</b>.</p>
       <button class="btn small" data-act="shortcut-done" style="align-self:flex-start">I've set it up</button>`
     : `<div class="row wrap">
         <button class="btn small ${has ? '' : 'primary'}" data-act="shortcut-create">${has ? 'Set up again (new key)' : 'Set up the Share button'}</button>

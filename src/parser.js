@@ -120,6 +120,7 @@ export function cleanTitle(line, cuts) {
     .replace(/[\s,.;:!\-–]+$/, '')
     .replace(/\s{2,}/g, ' ')
     .trim();
+  t = t.replace(/https?:\/\/\S+/gi, ' ').replace(/\b(register|click|visit|link|details)( here)?\s*[:\-]?\s*$/i, '').replace(/[\s,.;:!\-–]+$/, '').trim();
   t = t.replace(/^ptm\b/i, 'Parent–Teacher Meeting (PTM)');
   if (!t) t = 'School item';
   t = t.charAt(0).toUpperCase() + t.slice(1);
@@ -222,7 +223,13 @@ export function parseMessage(text, { children = [], today = startOfDay(new Date(
 export function undatedItem(text, { children = [], fallbackChildId = null } = {}) {
   const whole = String(text || '').replace(/[‎‏‪-‮]/g, '').replace(WA_HEADER, '');
   const lines = whole.split('\n').map((l) => l.trim()).filter(Boolean);
-  const first = lines.find(meaningful) || lines[0] || 'School message';
+  let first = lines.find((l) => meaningful(l) && !/^https?:\/\/\S+$/i.test(l)) || lines[0] || 'School message';
+  // A message that is only a link: name it after the site.
+  const onlyUrl = /^(https?:\/\/\S+)$/i.exec(first);
+  if (onlyUrl) {
+    try { first = 'Link: ' + new URL(onlyUrl[1]).hostname.replace(/^www\./, ''); } catch { first = 'Link from WhatsApp'; }
+    return { title: first, type: 'Event', childId: childForWholeMessage(whole, children) || fallbackChildId || children[0]?.id || null, time: '', location: '', line: whole.trim().slice(0, 400) };
+  }
   const tm = findTime(whole);
   return {
     title: cleanTitle(first, [tm && tm.match]),

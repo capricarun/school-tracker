@@ -1,4 +1,5 @@
 import express from 'express';
+import multer from 'multer';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { newId, newToken, hashToken, nowIso, rowToItem } from './db.js';
@@ -512,7 +513,7 @@ export function createApp(db) {
   );
 
   // ---------- attachments ----------
-  const SAFE_INLINE = /^(image\/(png|jpeg|gif|webp)|application\/pdf|text\/plain)$/;
+  const SAFE_INLINE = /^(image\/(png|jpeg|gif|webp|heic|heif)|application\/pdf|text\/plain)$/;
   async function assertRoom(familyId, adding) {
     const { used } = await db.get('SELECT COALESCE(SUM(size), 0) AS used FROM attachments WHERE family_id = ?', [familyId]);
     if (Number(used) + adding > config.maxFamilyStorageMb * 1048576) {
@@ -718,29 +719,43 @@ export function createApp(db) {
     express.text({ type: 'text/*', limit: '64kb' }),
     express.urlencoded({ extended: false, limit: '64kb' }),
     auth,
+    // The iPhone Shortcut sends a form with the text and any shared photos/PDFs.
+    multer({ storage: multer.memoryStorage(), limits: { fileSize: config.maxFileMb * 1048576 * 2, files: 6, fieldSize: 64 * 1024 } }).any(),
     wrap(async (req, res) => {
       limit('quick:' + req.member.id, 60, 3600e3);
+      const files = (req.files || [])
+        .filter((f) => f.size > 0 && f.size <= config.maxFileMb * 1048576 * 2 && !/^text\//.test(f.mimetype))
+        .map((f) => ({
+          name: (f.originalname || 'whatsapp-photo').replace(/[\\/\r\n"]/g, '_').slice(0, 120),
+          type: f.mimetype === 'application/octet-stream' && /\.(jpe?g)$/i.test(f.originalname || '') ? 'image/jpeg' : f.mimetype,
+          data: f.buffer,
+        }));
+      // A Shortcut may also send the text as a .txt file part.
+      const textPart = (req.files || []).find((f) => /^text\//.test(f.mimetype));
+      if (textPart && !req.body?.text) req.body = { ...(req.body || {}), text: textPart.buffer.toString('utf8') };
       const b = req.body;
       // Prefer "text", but accept any field name a Shortcut might have used (e.g. "Text", "message").
       const raw = typeof b === 'string' ? b
         : typeof b?.text === 'string' ? b.text
           : Object.values(b || {}).find((v) => typeof v === 'string' && v.trim().length > 3);
       const text = typeof raw === 'string' ? raw.trim().slice(0, 6000) : '';
-      if (!text) {
+      if (!text && !files.length) {
         // Running the Shortcut from the Shortcuts app (no shared text) is a handy connection test.
         return res.json({ ok: true, added: 0, message: `Connected to School Tracker as ${req.member.name}. Now share a WhatsApp message to it.` });
       }
       const children = await db.all('SELECT id, name, grade, color FROM children WHERE family_id = ? ORDER BY created_at', [req.familyId]);
       const today = startOfDay(new Date());
-      const { engine, items: found } = await extractItems(text, { children, today });
+      const { engine, items: found } = await extractItems(text, { children, today, images: files });
       const todayYmd = toYmd(today);
-      const existing = new Set(
-        (await db.all('SELECT title, date FROM items WHERE family_id = ? AND date >= ?', [req.familyId, todayYmd])).map((r) => `${r.date}|${normTitle(r.title)}`)
-      );
+      const existingRows = await db.all('SELECT id, title, date FROM items WHERE family_id = ? AND date >= ?', [req.familyId, todayYmd]);
+      const existingId = new Map(existingRows.map((r) => [`${r.date}|${normTitle(r.title)}`, r.id]));
+      const existing = new Set(existingId.keys());
       const fresh = [];
+      const dupIds = [];
       for (const f of found) {
         const k = `${f.date}|${normTitle(f.title)}`;
-        if (f.date < todayYmd || existing.has(k)) continue;
+        if (f.date < todayYmd) continue;
+        if (existing.has(k)) { if (existingId.get(k)) dupIds.push(existingId.get(k)); continue; }
         existing.add(k);
         fresh.push(f);
       }
@@ -752,8 +767,10 @@ export function createApp(db) {
       // No date anywhere in the message: still track it, for today, with a nudge this evening.
       let undated = false;
       if (!found.length) {
-        const u = undatedItem(text, { children });
-        if (!existing.has(`${todayYmd}|${normTitle(u.title)}`)) {
+        const u = text ? undatedItem(text, { children }) : { title: files.some((f) => f.type === 'application/pdf') ? 'Document from WhatsApp' : 'Photo from WhatsApp', type: 'Event', childId: children[0]?.id || null, time: '', location: '', line: '' };
+        const uk = `${todayYmd}|${normTitle(u.title)}`;
+        if (existingId.get(uk)) dupIds.push(existingId.get(uk));
+        if (!existing.has(uk) || (!text && files.length)) {
           undated = true;
           items.push(itemFromBody({ ...u, date: todayYmd, source, msg: text, noDate: true, rem: undatedReminders() }));
         }
@@ -769,16 +786,40 @@ export function createApp(db) {
         ]);
         notifyNewItems(req.member, items, ids).catch(() => {});
       }
+      // Keep shared photos/PDFs with the items they came from (or the matching existing item).
+      const attachTo = ids.length ? ids : [...new Set(dupIds)].slice(0, 1);
+      let attached = 0;
+      if (files.length && attachTo.length) {
+        const total = files.reduce((n, f) => n + f.data.length, 0) * attachTo.length;
+        await assertRoom(req.familyId, total);
+        const stmts = [];
+        for (const itemId of attachTo) {
+          for (const f of files) {
+            // Skip a photo already attached to this item (same name and size): re-sharing shouldn't duplicate it.
+            const dup = await db.get('SELECT 1 AS x FROM attachments WHERE item_id = ? AND name = ? AND size = ?', [itemId, f.name, f.data.length]);
+            if (dup) continue;
+            stmts.push([
+              'INSERT INTO attachments(id, item_id, family_id, kind, name, type, size, data, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+              [newId(), itemId, req.familyId, 'file', f.name, f.type, f.data.length, f.data, req.member.id, nowIso()],
+            ]);
+            attached++;
+          }
+        }
+        if (stmts.length) await db.batch(stmts);
+      }
       const when = (it) => `${dayWord(it.date)}${it.time ? ' ' + fmtTime(it.time) : ''}`;
       const nudge = undated && reminderAt({}, items[0].rem[0]);
-      const message = undated
-        ? `No date in the message, so it's saved for today with a reminder ${nudge ? (nudge.getDate() === new Date().getDate() ? 'at ' : 'tomorrow at ') + fmtTime(String(nudge.getHours()).padStart(2, '0') + ':' + String(nudge.getMinutes()).padStart(2, '0')) : 'later'}: ${items[0].title}`
+      const photoNote = attached ? ` (+ ${attached} ${files.every((f) => f.type.startsWith('image/')) ? 'photo' : 'file'}${attached > 1 ? 's' : ''})` : '';
+      const message = (!items.length && attached)
+        ? `Photo added to the existing item: ${existingRows.find((r) => r.id === attachTo[0])?.title || 'school item'}`
+        : undated
+        ? `No date in the message${photoNote}, so it's saved for today with a reminder ${nudge ? (nudge.getDate() === new Date().getDate() ? 'at ' : 'tomorrow at ') + fmtTime(String(nudge.getHours()).padStart(2, '0') + ':' + String(nudge.getMinutes()).padStart(2, '0')) : 'later'}: ${items[0].title}`
         : items.length
-        ? `Added ${items.length}: ${items.map((it) => `${it.title} (${when(it)})`).join(' · ')}`
+        ? `Added ${items.length}${photoNote}: ${items.map((it) => `${it.title} (${when(it)})`).join(' · ')}`
         : found.length
           ? 'Already in School Tracker, or the date has passed. Nothing new added.'
           : 'No date found in that message. Open School Tracker to add it by hand.';
-      console.log(`[quick-add] ${req.member.name}: found ${found.length}, added ${items.length} (${engine})`);
+      console.log(`[quick-add] ${req.member.name}: found ${found.length}, added ${items.length}, files ${files.length}/${attached} attached (${engine})`);
       res.json({ ok: true, engine, added: items.length, message, ids });
     })
   );

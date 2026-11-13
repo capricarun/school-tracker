@@ -34,15 +34,29 @@ function cleanItem(raw, children, fallbackChildId) {
   };
 }
 
-async function extractWithClaude(text, { children, today, fallbackChildId }) {
-  const user = `TODAY: ${toYmd(today)} (${today.toLocaleDateString('en-IN', { weekday: 'long' })})
+// Claude can read photos of circulars and PDFs too (images up to ~5 MB each).
+const VISION_TYPES = /^(image\/(jpeg|png|gif|webp)|application\/pdf)$/;
+function mediaBlocks(images = []) {
+  return images
+    .filter((f) => VISION_TYPES.test(f.type) && f.data.length <= 4.5 * 1048576)
+    .slice(0, 4)
+    .map((f) =>
+      f.type === 'application/pdf'
+        ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: f.data.toString('base64') } }
+        : { type: 'image', source: { type: 'base64', media_type: f.type, data: f.data.toString('base64') } }
+    );
+}
+
+async function extractWithClaude(text, { children, today, fallbackChildId, images = [] }) {
+  const media = mediaBlocks(images);
+  const user = (media.length ? 'The parent also shared the attached photo/document from the same message. Read it as part of the message.\n' : '') + `TODAY: ${toYmd(today)} (${today.toLocaleDateString('en-IN', { weekday: 'long' })})
 CHILDREN: ${JSON.stringify(children.map((c) => ({ id: c.id, name: c.name, grade: c.grade })))}
 MESSAGE:
 """
-${text}
+${text || '(no text — read the attached photo/document)'}
 """`;
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 30000);
+  const timer = setTimeout(() => ctrl.abort(), media.length ? 60000 : 30000);
   try {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -56,7 +70,7 @@ ${text}
         model: config.claudeModel,
         max_tokens: 4000,
         system: SYSTEM,
-        messages: [{ role: 'user', content: user }],
+        messages: [{ role: 'user', content: media.length ? [...media, { type: 'text', text: user }] : user }],
       }),
     });
     if (!res.ok) throw new Error(`Claude API ${res.status}: ${(await res.text()).slice(0, 200)}`);
@@ -74,7 +88,7 @@ ${text}
 }
 
 export async function extractItems(text, opts) {
-  if (config.anthropicKey) {
+  if (config.anthropicKey && (text || opts.images?.length)) {
     try {
       const items = await extractWithClaude(text, opts);
       return { engine: 'claude', items };
