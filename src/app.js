@@ -834,7 +834,7 @@ export function createApp(db) {
         ? `Added ${items.length}${photoNote}: ${items.map((it) => `${it.title} (${when(it)})`).join(' · ')}`
         : found.length
           ? 'Already in School Tracker, or the date has passed. Nothing new added.'
-          : 'No date found in that message. Open School Tracker to add it by hand.';
+          : `Already saved today: ${undatedItem(text || 'Photo from WhatsApp', { children }).title}. Nothing new added.`;
       console.log(`[quick-add] ${req.member.name}: found ${found.length}, added ${items.length}, files ${files.length}/${attached} attached (${engine})`);
       res.json({ ok: true, engine, added: items.length, message, ids });
     })

@@ -190,7 +190,9 @@ test('iPhone Shortcut quick-add: saves items, dedupes, key is add-only', async (
   const r3 = await call('/api/quick-add', { method: 'POST', token: key, body: { text: 'Dear Parents,\nPlease send the signed consent form.' } });
   assert.equal(r3.body.added, 1);
   assert.match(r3.body.message, /^No date in the message, so it's saved for today with a reminder .*: Send the signed consent form$/);
-  assert.equal((await call('/api/quick-add', { method: 'POST', token: key, body: { text: 'Dear Parents,\nPlease send the signed consent form.' } })).body.added, 0);
+  const again = (await call('/api/quick-add', { method: 'POST', token: key, body: { text: 'Dear Parents,\nPlease send the signed consent form.' } })).body;
+  assert.equal(again.added, 0);
+  assert.equal(again.message, 'Already saved today: Send the signed consent form. Nothing new added.');
 
   // a form-encoded body or another field name also works
   const r4 = await fetch(`${base}/api/quick-add`, { method: 'POST', headers: { authorization: 'Bearer ' + key, 'content-type': 'application/x-www-form-urlencoded' }, body: 'Text=' + encodeURIComponent('Sports day on 2nd Jan 2027 at 8 am.') });
