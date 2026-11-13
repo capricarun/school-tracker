@@ -186,14 +186,29 @@ test('iPhone Shortcut quick-add: saves items, dedupes, key is add-only', async (
   const r2 = await fetch(`${base}/api/quick-add`, { method: 'POST', headers: { authorization: 'Bearer ' + key, 'content-type': 'text/plain' }, body: msg });
   assert.equal((await r2.json()).added, 0);
 
-  // no date → nothing added, helpful message
-  const r3 = await call('/api/quick-add', { method: 'POST', token: key, body: { text: 'Thank you ma’am' } });
-  assert.match(r3.body.message, /No date found/);
+  // no date → still saved for today, flagged undated, with a reminder; not duplicated on re-share
+  const r3 = await call('/api/quick-add', { method: 'POST', token: key, body: { text: 'Dear Parents,\nPlease send the signed consent form.' } });
+  assert.equal(r3.body.added, 1);
+  assert.match(r3.body.message, /^No date in the message, so it's saved for today with a reminder .*: Send the signed consent form$/);
+  assert.equal((await call('/api/quick-add', { method: 'POST', token: key, body: { text: 'Dear Parents,\nPlease send the signed consent form.' } })).body.added, 0);
+
+  // a form-encoded body or another field name also works
+  const r4 = await fetch(`${base}/api/quick-add`, { method: 'POST', headers: { authorization: 'Bearer ' + key, 'content-type': 'application/x-www-form-urlencoded' }, body: 'Text=' + encodeURIComponent('Sports day on 2nd Jan 2027 at 8 am.') });
+  assert.equal((await r4.json()).added, 1);
+  // empty input = connection test; a bad key explains itself
+  assert.match((await call('/api/quick-add', { method: 'POST', token: key, body: {} })).body.message, /^Connected to School Tracker as A/);
+  assert.match((await call('/api/quick-add', { method: 'POST', token: 'wrong', body: { text: msg } })).body.message, /did not accept the key/);
 
   // the key cannot read family data
   assert.equal((await call('/api/state', { token: key })).status, 403);
   const st = await call('/api/state', { token: tok });
-  assert.equal(st.body.items.length, 1);
+  assert.equal(st.body.items.length, 3);
   assert.equal(st.body.hasShortcutKey, true);
+  const und = st.body.items.find((i) => i.noDate);
+  assert.equal(und.rem.length, 1);
+  assert.match(und.rem[0], /^c:/);
+  // picking a real date clears the "no date" flag
+  await call('/api/items/' + und.id, { method: 'PATCH', token: tok, body: { date: '2026-12-01' } });
+  assert.equal((await call('/api/state', { token: tok })).body.items.find((i) => i.id === und.id).noDate, false);
   assert.equal(st.body.items[0].source, 'WhatsApp');
 });

@@ -2,8 +2,9 @@ import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { newId, newToken, hashToken, nowIso, rowToItem } from './db.js';
-import { TYPES, defaultReminders, startOfDay, isValidKey, isCustom, MAX_CUSTOM, toYmd } from '../public/shared/reminders.js';
+import { TYPES, defaultReminders, startOfDay, isValidKey, isCustom, MAX_CUSTOM, toYmd, reminderAt } from '../public/shared/reminders.js';
 import { extractItems, extractFromChat } from './extract.js';
+import { undatedItem } from './parser.js';
 import { pushToMember, vapidPublicKey, verifyAction } from './push.js';
 import { buildNotification, status as schedulerStatus, dayWord, fmtTime } from './scheduler.js';
 import { config } from './config.js';
@@ -101,6 +102,8 @@ export function createApp(db) {
       source: body.source !== undefined ? str(body.source, 40) : base.source || '',
       msg: body.msg !== undefined ? str(body.msg, 2000) : base.msg || '',
       rem,
+      // An undated item stays "no date" until someone picks a real date for it.
+      noDate: body.noDate !== undefined ? !!body.noDate : body.date !== undefined && body.date !== base.date ? false : !!base.noDate,
     };
   }
 
@@ -339,8 +342,8 @@ export function createApp(db) {
     })
   );
 
-  const INSERT_ITEM = `INSERT INTO items(id, family_id, child_id, type, title, date, time, location, source, msg, rem, created_by, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+  const INSERT_ITEM = `INSERT INTO items(id, family_id, child_id, type, title, date, time, location, source, msg, rem, created_by, created_at, updated_at, no_date)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
   app.post(
     '/api/items',
@@ -354,7 +357,7 @@ export function createApp(db) {
       await db.batch([
         ...items.map((it, k) => [
           INSERT_ITEM,
-          [ids[k], req.familyId, it.childId, it.type, it.title, it.date, it.time, it.location, it.source, it.msg, JSON.stringify(it.rem), req.member.id, t, t],
+          [ids[k], req.familyId, it.childId, it.type, it.title, it.date, it.time, it.location, it.source, it.msg, JSON.stringify(it.rem), req.member.id, t, t, it.noDate ? 1 : 0],
         ]),
         logStmt(req.familyId, req.member.id, `added ${ids.length} item${ids.length > 1 ? 's' : ''}`),
       ]);
@@ -373,8 +376,8 @@ export function createApp(db) {
       await assertChildren(req.familyId, [it.childId]);
       const stmts = [
         [
-          `UPDATE items SET child_id = ?, type = ?, title = ?, date = ?, time = ?, location = ?, source = ?, msg = ?, rem = ?, updated_at = ? WHERE id = ?`,
-          [it.childId, it.type, it.title, it.date, it.time, it.location, it.source, it.msg, JSON.stringify(it.rem), nowIso(), row.id],
+          `UPDATE items SET child_id = ?, type = ?, title = ?, date = ?, time = ?, location = ?, source = ?, msg = ?, rem = ?, no_date = ?, updated_at = ? WHERE id = ?`,
+          [it.childId, it.type, it.title, it.date, it.time, it.location, it.source, it.msg, JSON.stringify(it.rem), it.noDate ? 1 : 0, nowIso(), row.id],
         ],
       ];
       // If the date or time moved, reminders should fire again for the new schedule.
@@ -426,7 +429,7 @@ export function createApp(db) {
     const first = items[0];
     const payload =
       items.length === 1
-        ? { title: `New: ${first.title}`, body: `${dayWord(first.date)}${first.time ? ' at ' + fmtTime(first.time) : ''} · added by ${member.name}`, tag: `new-${ids[0]}`, url: `/#item/${ids[0]}` }
+        ? { title: `New: ${first.title}`, body: `${first.noDate ? 'No date given' : dayWord(first.date) + (first.time ? ' at ' + fmtTime(first.time) : '')} · added by ${member.name}`, tag: `new-${ids[0]}`, url: `/#item/${ids[0]}` }
         : { title: `${items.length} new school items`, body: items.slice(0, 3).map((i) => i.title).join(' · ') + ` · added by ${member.name}`, tag: `new-${ids[0]}`, url: '/#home' };
     for (const o of others) await pushToMember(db, o.id, payload);
   }
@@ -699,6 +702,15 @@ export function createApp(db) {
     })
   );
 
+  // Reminder for an undated item: 7 PM today, or 8 AM tomorrow if it's already evening.
+  function undatedReminders(now = new Date()) {
+    const at = new Date(now);
+    if (now.getHours() < 18 || (now.getHours() === 18 && now.getMinutes() < 45)) at.setHours(19, 0, 0, 0);
+    else { at.setDate(at.getDate() + 1); at.setHours(8, 0, 0, 0); }
+    const p = (n) => String(n).padStart(2, '0');
+    return [`c:${toYmd(at)}T${p(at.getHours())}:${p(at.getMinutes())}`];
+  }
+
   const normTitle = (t) => String(t).toLowerCase().replace(/[^a-z0-9]+/g, '');
 
   app.post(
@@ -709,11 +721,13 @@ export function createApp(db) {
     wrap(async (req, res) => {
       limit('quick:' + req.member.id, 60, 3600e3);
       const b = req.body;
+      // Prefer "text", but accept any field name a Shortcut might have used (e.g. "Text", "message").
       const raw = typeof b === 'string' ? b
         : typeof b?.text === 'string' ? b.text
           : Object.values(b || {}).find((v) => typeof v === 'string' && v.trim().length > 3);
       const text = typeof raw === 'string' ? raw.trim().slice(0, 6000) : '';
       if (!text) {
+        // Running the Shortcut from the Shortcuts app (no shared text) is a handy connection test.
         return res.json({ ok: true, added: 0, message: `Connected to School Tracker as ${req.member.name}. Now share a WhatsApp message to it.` });
       }
       const children = await db.all('SELECT id, name, grade, color FROM children WHERE family_id = ? ORDER BY created_at', [req.familyId]);
@@ -735,19 +749,31 @@ export function createApp(db) {
       const items = fresh.map((f) => ({
         ...itemFromBody({ title: f.title, type: f.type, childId: f.childId, date: f.date, time: f.time, location: f.location, source, msg: text }),
       }));
+      // No date anywhere in the message: still track it, for today, with a nudge this evening.
+      let undated = false;
+      if (!found.length) {
+        const u = undatedItem(text, { children });
+        if (!existing.has(`${todayYmd}|${normTitle(u.title)}`)) {
+          undated = true;
+          items.push(itemFromBody({ ...u, date: todayYmd, source, msg: text, noDate: true, rem: undatedReminders() }));
+        }
+      }
       const ids = items.map(() => newId());
       if (items.length) {
         await db.batch([
           ...items.map((it, k) => [
             INSERT_ITEM,
-            [ids[k], req.familyId, it.childId, it.type, it.title, it.date, it.time, it.location, it.source, it.msg, JSON.stringify(it.rem), req.member.id, t, t],
+            [ids[k], req.familyId, it.childId, it.type, it.title, it.date, it.time, it.location, it.source, it.msg, JSON.stringify(it.rem), req.member.id, t, t, it.noDate ? 1 : 0],
           ]),
           logStmt(req.familyId, req.member.id, `shared ${items.length} item${items.length > 1 ? 's' : ''} from ${source}`),
         ]);
         notifyNewItems(req.member, items, ids).catch(() => {});
       }
       const when = (it) => `${dayWord(it.date)}${it.time ? ' ' + fmtTime(it.time) : ''}`;
-      const message = items.length
+      const nudge = undated && reminderAt({}, items[0].rem[0]);
+      const message = undated
+        ? `No date in the message, so it's saved for today with a reminder ${nudge ? (nudge.getDate() === new Date().getDate() ? 'at ' : 'tomorrow at ') + fmtTime(String(nudge.getHours()).padStart(2, '0') + ':' + String(nudge.getMinutes()).padStart(2, '0')) : 'later'}: ${items[0].title}`
+        : items.length
         ? `Added ${items.length}: ${items.map((it) => `${it.title} (${when(it)})`).join(' · ')}`
         : found.length
           ? 'Already in School Tracker, or the date has passed. Nothing new added.'
@@ -778,6 +804,7 @@ export function createApp(db) {
     const status = err.status || (err.type === 'entity.parse.failed' ? 400 : 500);
     if (status >= 500) console.error(err);
     const error = status >= 500 ? 'Something went wrong' : err.message;
+    // The iPhone Shortcut shows the "message" field in its banner, so explain failures there too.
     const forShortcut =
       status === 401 ? 'School Tracker did not accept the key. In the app go to Family → Share from WhatsApp → Set up again, and paste the new key into the Shortcut header.'
         : status === 403 ? 'This key can only add items.'

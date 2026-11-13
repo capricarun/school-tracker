@@ -22,7 +22,7 @@ export function dayWord(ymd, now = new Date()) {
 }
 
 export function buildNotification(item, child, memberId, now = new Date()) {
-  const when = dayWord(item.date, now) + (item.time ? ' at ' + fmtTime(item.time) : '');
+  const when = item.noDate ? 'Reminder' : dayWord(item.date, now) + (item.time ? ' at ' + fmtTime(item.time) : '');
   const bits = [child ? `${child.name}${child.grade ? ' · ' + child.grade : ''}` : null, item.location || null];
   if (item.type === 'Assignment') bits.push('Check it is in the school bag');
   if (item.type === 'Task') bits.push('Needs doing');

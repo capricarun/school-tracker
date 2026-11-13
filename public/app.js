@@ -240,7 +240,9 @@ function itemCard(it) {
   }
   const up = upcomingReminders(it);
   const whenCls = dd < 0 ? 'overdue' : dd === 0 ? 'today' : '';
-  const when = (dd < 0 ? 'Overdue · ' : '') + dayLabel(d) + (it.time ? ' · ' + fmtTime(it.time) : '');
+  const when = it.noDate
+    ? 'No date given · tap to set one'
+    : (dd < 0 ? 'Overdue · ' : '') + dayLabel(d) + (it.time ? ' · ' + fmtTime(it.time) : '');
   const next = up.length ? `Next reminder ${dayLabel(up[0])}, ${fmtClock(up[0])}` : dd <= 0 ? 'Due today — no more reminders' : 'No reminders on';
   return `<div class="item">
     <button class="check" data-act="toggle-done" data-id="${it.id}" aria-label="Mark done: ${esc(it.title)}"><span></span></button>
@@ -383,7 +385,7 @@ function addScreen() {
 }
 
 function draftRems(d) {
-  const r = defaultReminders(d.type, d.time);
+  const r = d.noDate ? [] : defaultReminders(d.type, d.time);
   if (d.custom && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(d.custom)) r.push('c:' + d.custom);
   return r;
 }
@@ -463,6 +465,7 @@ function draftCard(d, i) {
     ${S.data.children.length ? `<div class="field"><span class="label">For</span><div class="chips" role="group" aria-label="Child">${S.data.children
       .map((c) => `<button class="chip sm" data-act="draft-set" data-i="${i}" data-k="childId" data-v="${c.id}" aria-pressed="${d.childId === c.id}">${esc(c.name)}</button>`)
       .join('')}</div></div>` : ''}
+    ${d.noDate ? '<p class="small" style="margin:0">No date in the message — saved for today. Change the date if you know it.</p>' : ''}
     <div class="grid2 dt">
       <div class="field"><label for="d${i}">Date</label><input type="date" id="d${i}" data-bind="draft.${i}.date" data-rerender value="${esc(d.date)}"></div>
       <div class="field"><label for="h${i}">Time (optional)</label><input type="time" id="h${i}" data-bind="draft.${i}.time" data-rerender value="${esc(d.time)}"></div>
@@ -485,8 +488,8 @@ function reviewScreen() {
       <p class="sub" style="margin-top:8px;font-size:14px">${S.drafts.length ? 'Check each one. Fix anything that is wrong, skip what you don\'t need.' : ''}
       ${S.engine === 'claude' ? 'Read by Claude.' : S.engine === 'rules' ? 'Read by the built-in date reader.' : ''}</p></div>
     ${S.drafts.map(draftCard).join('')}
-    ${!S.drafts.length ? `<div class="card empty"><p class="sub" style="font-size:14px">We couldn't find a date in that message. Go back and check it, or add the item by hand.</p>
-      <button class="btn" data-act="manual">Add by hand</button></div>` : ''}
+    ${!S.drafts.length ? `<div class="card empty"><p class="sub" style="font-size:14px">We couldn't find a date in that message. You can still save it: it goes on today's list with a reminder this evening.</p>
+      <div class="row wrap" style="justify-content:center"><button class="btn primary" data-act="save-undated">Save without a date</button><button class="btn" data-act="manual">Add by hand</button></div></div>` : ''}
   </main>
   <div class="savebar"><div class="inner">
     <button class="btn primary big block" data-act="save-drafts" ${n === 0 || S.saving ? 'disabled' : ''}>${S.saving ? 'Saving…' : n ? `Save ${n} to tracker` : 'Nothing selected'}</button>
@@ -518,7 +521,8 @@ function itemScreen() {
       ).join('')}</div>
       <label for="it-title" class="label">What</label>
       <input type="text" id="it-title" data-save="title" value="${esc(it.title)}" style="font-family:'Space Grotesk',Inter,sans-serif;font-size:20px;font-weight:600;min-height:52px">
-      <p class="when ${dd < 0 && !it.done ? 'overdue' : ''}" style="margin:0;font-size:15px">${dd < 0 && !it.done ? 'Overdue · ' : ''}${WDL[d.getDay()]}, ${d.getDate()} ${MON[d.getMonth()]} ${d.getFullYear()}${it.time ? ' · ' + fmtTime(it.time) : ''}${dd >= 0 && dd <= 1 ? ' (' + dayLabel(d) + ')' : ''}</p>
+      ${it.noDate ? `<p class="hint" style="margin:0;font-size:13px">The message had no date. It's on today's list with a reminder; pick the real date below if there is one.</p>` : ''}
+      <p class="when ${dd < 0 && !it.done ? 'overdue' : ''}" style="margin:0;font-size:15px;${it.noDate ? 'display:none' : ''}">${dd < 0 && !it.done ? 'Overdue · ' : ''}${WDL[d.getDay()]}, ${d.getDate()} ${MON[d.getMonth()]} ${d.getFullYear()}${it.time ? ' · ' + fmtTime(it.time) : ''}${dd >= 0 && dd <= 1 ? ' (' + dayLabel(d) + ')' : ''}</p>
     </div>
     ${S.data.children.length ? `<div class="field"><span class="label">For</span><div class="chips" role="group" aria-label="Child">${S.data.children
       .map((c) => `<button class="chip sm" data-act="item-set" data-k="childId" data-v="${c.id}" aria-pressed="${it.childId === c.id}">${esc(c.name)}</button>`)
@@ -978,6 +982,20 @@ const actions = {
       toast(e.message);
     }
   },
+  'save-undated'() {
+    const lines = S.text.split('\n').map((l) => l.trim()).filter(Boolean);
+    const skip = /^(dear\s+\w+|greetings.*|good\s+(morning|afternoon|evening)|hello|hi|thanks?.*|thank you.*|regards.*)[\s,!.:]*$/i;
+    const first = (lines.find((l) => !skip.test(l)) || lines[0] || 'School message').replace(/^(kindly|please)\s+/i, '');
+    const now = new Date();
+    const at = new Date(now);
+    if (now.getHours() < 18 || (now.getHours() === 18 && now.getMinutes() < 45)) at.setHours(19, 0, 0, 0);
+    else { at.setDate(at.getDate() + 1); at.setHours(8, 0, 0, 0); }
+    S.drafts = [{
+      title: (first.charAt(0).toUpperCase() + first.slice(1)).slice(0, 80), type: 'Task', childId: S.data.children[0]?.id || null,
+      date: toYmd(now), time: '', location: '', line: S.text.slice(0, 400), inc: true, noDate: true, custom: toLocalInput(at),
+    }];
+    render();
+  },
   manual() {
     S.engine = '';
     S.importInfo = null;
@@ -997,7 +1015,7 @@ const actions = {
         method: 'POST',
         body: {
           items: list.map((d) => ({
-            title: d.title.trim(), type: d.type, childId: d.childId, date: d.date, time: d.time, location: d.location,
+            title: d.title.trim(), type: d.type, childId: d.childId, date: d.date, time: d.time, location: d.location, noDate: !!d.noDate,
             source: S.importInfo ? `WhatsApp · ${S.importInfo.chatName}`.slice(0, 40) : S.src,
             msg: d.line || S.text.slice(0, 2000), rem: draftRems(d),
           })),
@@ -1205,6 +1223,8 @@ document.addEventListener('input', (e) => {
 });
 document.addEventListener('change', (e) => {
   const el = e.target;
+  const dm = /^draft\.(\d+)\.date$/.exec(el.dataset.bind || '');
+  if (dm && S.drafts[dm[1]]) S.drafts[dm[1]].noDate = false;
   if (el.dataset.bind && el.dataset.rerender !== undefined) render();
   if (el.dataset.save && S.route === 'item') {
     const k = el.dataset.save;

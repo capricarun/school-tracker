@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseMessage, findDate, findTime } from '../src/parser.js';
+import { parseMessage, findDate, findTime, undatedItem } from '../src/parser.js';
 
 const today = new Date(2026, 10, 11); // Wed 11 Nov 2026
 const children = [
@@ -69,4 +69,46 @@ test('several dated sentences on one line become separate items', () => {
     ['Pay term 2 fees', '2026-11-25', ''],
     ['Annual day', '2026-11-28', '17:00'],
   ]);
+});
+
+test('more date formats teachers use', () => {
+  const ymd = (s) => {
+    const r = findDate(s, today);
+    return r && `${r.date.getFullYear()}-${r.date.getMonth() + 1}-${r.date.getDate()}`;
+  };
+  assert.equal(ymd('Annual day on 15.11.2026'), '2026-11-15');
+  assert.equal(ymd('on 20.12.26'), '2026-12-20');
+  assert.equal(ymd('15-Nov-2026'), '2026-11-15');
+  assert.equal(ymd("Fancy dress 18th Nov'26"), '2026-11-18');
+  assert.equal(ymd('November 20th, 2026'), '2026-11-20');
+  assert.equal(ymd('PTM 21st Nov, 10:30 am'), '2026-11-21');
+  assert.equal(ymd('Submit by the 17th'), '2026-11-17');
+  assert.equal(ymd('Submit by 5th'), '2026-12-5');
+  assert.equal(ymd('this Friday'), '2026-11-13');
+  assert.equal(ymd('pick up at 10.30 am'), null);
+  assert.equal(ymd('Rs 1.50 per page'), null);
+});
+
+test('notice layout with Date:/Time:/Venue: lines becomes one item', () => {
+  const items = parseMessage(`Dear Parents,
+
+Annual Day Celebration
+Date: 15.11.2026
+Time: 10 am
+Venue: School Auditorium
+
+Regards,
+Principal`, { children, today });
+  assert.deepEqual(items.map((i) => [i.title, i.date, i.time, i.location]), [['Annual Day Celebration', '2026-11-15', '10:00', 'School Auditorium']]);
+});
+
+test('text shared from WhatsApp keeps the message date for "tomorrow"', () => {
+  const items = parseMessage('[09/11/26, 6:30 PM] Class Teacher 4B: Bring a white kerchief tomorrow.', { children, today });
+  assert.deepEqual(items.map((i) => [i.title, i.date]), [['Bring a white kerchief', '2026-11-10']]);
+});
+
+test('undated message still yields an item title', () => {
+  const it = undatedItem('Dear Parents,\nPlease ensure children carry their library books.\nThanks', { children });
+  assert.equal(it.title, 'Ensure children carry their library books');
+  assert.equal(it.type, 'Task'); // "carry" is something parents must do
 });

@@ -30,7 +30,7 @@ const SCHEMA = `
     date TEXT NOT NULL, time TEXT NOT NULL DEFAULT '', location TEXT NOT NULL DEFAULT '',
     source TEXT NOT NULL DEFAULT '', msg TEXT NOT NULL DEFAULT '', rem TEXT NOT NULL DEFAULT '[]',
     done INTEGER NOT NULL DEFAULT 0, done_by TEXT, done_at TEXT,
-    created_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    created_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, no_date INTEGER NOT NULL DEFAULT 0);
   CREATE INDEX IF NOT EXISTS items_family ON items(family_id, done, date);
   CREATE TABLE IF NOT EXISTS push_subs (endpoint TEXT PRIMARY KEY, member_id TEXT NOT NULL, sub TEXT NOT NULL, created_at TEXT NOT NULL);
   CREATE INDEX IF NOT EXISTS push_subs_member ON push_subs(member_id);
@@ -103,7 +103,10 @@ export async function openDb({ url = config.databaseUrl, authToken = config.data
   const db = url ? await libsql(url, authToken) : await nodeSqlite(file || path.join(config.dataDir, 'school-tracker.db'));
   await db.exec(SCHEMA);
   // Migrations for databases created by earlier versions.
-  for (const sql of ["ALTER TABLE devices ADD COLUMN label TEXT NOT NULL DEFAULT ''"]) {
+  for (const sql of [
+    "ALTER TABLE devices ADD COLUMN label TEXT NOT NULL DEFAULT ''",
+    'ALTER TABLE items ADD COLUMN no_date INTEGER NOT NULL DEFAULT 0',
+  ]) {
     try { await db.exec(sql); } catch { /* column already exists */ }
   }
   return db;
@@ -134,6 +137,7 @@ export function rowToItem(r) {
     source: r.source,
     msg: r.msg,
     rem: JSON.parse(r.rem || '[]'),
+    noDate: !!r.no_date,
     done: !!r.done,
     doneBy: r.done_by,
     doneAt: r.done_at,
