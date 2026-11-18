@@ -1,6 +1,7 @@
 import {
   TYPES, REMINDERS, reminderAt, upcomingReminders, daysFromToday, parseYmd, defaultReminders, toYmd,
   isCustom, MAX_CUSTOM, pad,
+  isRecurring, recurringKey, describeRecurring, nextOccurrence, MAX_RECURRING,
 } from './shared/reminders.js';
 import { parseWhatsAppExport, chatNameFromFile } from './shared/whatsapp.js';
 import { readChatFile } from './shared/unzip.js';
@@ -53,6 +54,7 @@ const ICON = {
   trash: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12"/><path d="M9 7V4h6v3"/></svg>',
   sun: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>',
   moon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg>',
+  repeat: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 2l4 4-4 4"/><path d="M3 11V9a3 3 0 0 1 3-3h15"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a3 3 0 0 1-3 3H3"/></svg>',
   clip: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.4 11.1l-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg>',
   file: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></svg>',
   note: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 4h8M6 4h12a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/><path d="M8 10h8M8 14h8M8 18h5"/></svg>',
@@ -114,6 +116,7 @@ const S = {
   shortcut: null, // { key, url } right after creating an iPhone Shortcut key (shown once)
   shortcutOpen: false,
   shares: null, // recent Shortcut shares (what arrived, what happened)
+  rec: null, // repeating-reminder form on the open item: { open, freq, time, days, untilMode, until }
 };
 const blobUrls = new Map(); // attachment id -> object URL (thumbnails + viewer)
 const blobData = new Map(); // attachment id -> Blob (for Share)
@@ -212,6 +215,7 @@ function onRoute() {
   S.param = param || null;
   S.confirmDelete = false;
   S.customRem = '';
+  S.rec = null;
   S.noteDraft = null;
   S.viewer = null;
   if (S.route === 'join' && S.param) loadInvite(S.param);
@@ -298,7 +302,8 @@ function itemCard(it) {
   const when = it.noDate
     ? 'No date given · tap to set one'
     : (dd < 0 ? 'Overdue · ' : '') + dayLabel(d) + (it.time ? ' · ' + fmtTime(it.time) : '');
-  const next = up.length ? `Next reminder ${dayLabel(up[0])}, ${fmtClock(up[0])}` : dd <= 0 ? 'Due today — no more reminders' : 'No reminders on';
+  const repeats = it.rem.some(isRecurring);
+  const next = (up.length ? `Next reminder ${dayLabel(up[0])}, ${fmtClock(up[0])}` : dd <= 0 ? 'Due today — no more reminders' : 'No reminders on') + (repeats ? ' · repeats' : '');
   return `<article class="item"><div class="card-tools">${extras}${del}</div>
     <button class="item-body" data-act="open" data-id="${it.id}">
       <span class="row wrap" style="gap:8px">
@@ -448,6 +453,59 @@ function draftRems(d) {
   const r = d.noDate ? [] : defaultReminders(d.type, d.time);
   if (d.custom && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(d.custom)) r.push('c:' + d.custom);
   return r;
+}
+
+const DAY_CHIPS = [[1, 'Mon'], [2, 'Tue'], [3, 'Wed'], [4, 'Thu'], [5, 'Fri'], [6, 'Sat'], [0, 'Sun']];
+function repeatSection(it) {
+  const rules = it.rem.filter(isRecurring);
+  const r = S.rec;
+  const list = rules.map((k) => {
+    const next = it.done ? null : nextOccurrence(k);
+    return `<div class="toggle" style="cursor:default">
+      <span class="t-label"><b>${esc(describeRecurring(k))}</b><small>${it.done ? 'Stopped — item is done' : next ? 'Next: ' + esc(fmtWhen(next)) : 'Finished'}</small></span>
+      <button class="btn small danger" data-act="del-repeat" data-k="${esc(k)}" aria-label="Stop ${esc(describeRecurring(k))}">Stop</button></div>`;
+  }).join('');
+  const form = !r?.open
+    ? (rules.length < MAX_RECURRING ? `<button class="btn small" data-act="repeat-open" style="align-self:flex-start;margin:6px 0 4px">${ICON.repeat} Add a repeating reminder</button>` : '')
+    : `<div class="stack repeat-form" style="gap:12px;padding:6px 0 4px">
+        <div class="field"><span class="label">Repeat</span>
+          <div class="chips" role="group" aria-label="How often">${[['daily', 'Every day'], ['weekdays', 'Weekdays'], ['weekly', 'Weekly on…']].map(
+            ([v, l]) => `<button class="chip sm" data-act="repeat-set" data-k="freq" data-v="${v}" aria-pressed="${r.freq === v}">${l}</button>`
+          ).join('')}</div></div>
+        ${r.freq === 'weekly' ? `<div class="field"><span class="label">On</span>
+          <div class="chips" role="group" aria-label="Days">${DAY_CHIPS.map(
+            ([d, l]) => `<button class="chip sm day-chip" data-act="repeat-day" data-v="${d}" aria-pressed="${r.days.includes(d)}">${l}</button>`
+          ).join('')}</div></div>` : ''}
+        <div class="grid2 dt side">
+          <div class="field"><label for="rep-time">At</label><input type="time" id="rep-time" data-bind="rec.time" data-rerender value="${esc(r.time)}"></div>
+          <div class="field"><label for="rep-until-mode">Until</label>
+            <select id="rep-until-mode" data-bind="rec.untilMode" data-rerender>
+              <option value="done" ${r.untilMode === 'done' ? 'selected' : ''}>It's marked done</option>
+              ${it.noDate ? '' : `<option value="item" ${r.untilMode === 'item' ? 'selected' : ''}>The item's date</option>`}
+              <option value="date" ${r.untilMode === 'date' ? 'selected' : ''}>A date I pick</option>
+            </select></div>
+        </div>
+        ${r.untilMode === 'date' ? `<div class="field"><label for="rep-until">Last day</label><input type="date" id="rep-until" data-bind="rec.until" data-rerender value="${esc(r.until)}" min="${toYmd(new Date())}"></div>` : ''}
+        <p class="small" style="margin:0">${esc(previewRepeat(it, r))}</p>
+        <div class="row wrap"><button class="btn small primary" data-act="repeat-save">Save repeating reminder</button><button class="btn small" data-act="repeat-cancel">Cancel</button></div>
+      </div>`;
+  return `<section class="card list">
+    <div class="row between" style="padding:12px 0 6px;align-items:baseline"><h2>Repeating reminders</h2><span class="small">${rules.length ? rules.length + ' active' : 'e.g. reading log every evening'}</span></div>
+    ${list}
+    ${form}
+  </section>`;
+}
+function repeatKeyFromForm(it, r) {
+  const until = r.untilMode === 'item' ? it.date : r.untilMode === 'date' ? r.until : '';
+  return recurringKey({ freq: r.freq, time: r.time, days: r.days, until });
+}
+function previewRepeat(it, r) {
+  if (r.freq === 'weekly' && !r.days.length) return 'Pick at least one day.';
+  if (!/^\d{2}:\d{2}$/.test(r.time || '')) return 'Pick a time.';
+  if (r.untilMode === 'date' && !r.until) return 'Pick the last day.';
+  const key = repeatKeyFromForm(it, r);
+  const next = nextOccurrence(key);
+  return `${describeRecurring(key)}. ${next ? 'First one: ' + fmtWhen(next) + '.' : 'That end date has already passed.'}`;
 }
 
 function attachmentsSection(it) {
@@ -604,6 +662,7 @@ function itemScreen() {
         <div class="rem-add"><input type="datetime-local" id="custom-rem" data-bind="customRem" value="${esc(S.customRem)}">
         <button class="btn small primary" data-act="add-custom">Add reminder</button></div></div>` : ''}
     </section>
+    ${repeatSection(it)}
     ${urlsIn(it.msg).length ? `<section class="card stack" style="gap:10px"><h2>Links in the message</h2>
       ${urlsIn(it.msg).map((u) => `<a class="att" href="${esc(u)}" target="_blank" rel="noopener noreferrer" style="text-decoration:none;color:inherit">
         <span class="att-thumb">${ICON.link}</span>
@@ -983,6 +1042,7 @@ async function importChat(file) {
 
 /* ---------------- actions ---------------- */
 function setPath(path, value) {
+  if (path.startsWith('rec.')) { if (S.rec) S.rec[path.slice(4)] = value; return; }
   const parts = path.split('.');
   let o = parts[0] === 'draft' ? S.drafts : S;
   if (parts[0] === 'draft') parts.shift();
@@ -1168,6 +1228,34 @@ const actions = {
     }
   },
   'item-set': (el) => patchItem(S.param, { [el.dataset.k]: el.dataset.v }),
+  'repeat-open'() {
+    const it = itemOf(S.param);
+    S.rec = { open: true, freq: 'daily', time: '19:00', days: [new Date().getDay()], untilMode: it.noDate ? 'done' : 'item', until: '' };
+    render();
+  },
+  'repeat-cancel': () => { S.rec = null; render(); },
+  'repeat-set': (el) => { S.rec[el.dataset.k] = el.dataset.v; render(); },
+  'repeat-day'(el) {
+    const d = Number(el.dataset.v);
+    S.rec.days = S.rec.days.includes(d) ? S.rec.days.filter((x) => x !== d) : [...S.rec.days, d];
+    render();
+  },
+  'repeat-save'() {
+    const it = itemOf(S.param);
+    const r = S.rec;
+    const problem = previewRepeat(it, r);
+    if (/^Pick|already passed/.test(problem)) { toast(problem); return; }
+    const key = repeatKeyFromForm(it, r);
+    if (it.rem.includes(key)) { toast('That repeating reminder is already set'); return; }
+    S.rec = null;
+    patchItem(it.id, { rem: [...it.rem, key] });
+    toast(`${describeRecurring(key)} — your family gets these too`);
+  },
+  'del-repeat'(el) {
+    const it = itemOf(S.param);
+    patchItem(it.id, { rem: it.rem.filter((k) => k !== el.dataset.k) });
+    toast('Repeating reminder stopped');
+  },
   'add-custom'() {
     const it = itemOf(S.param);
     const v = (document.getElementById('custom-rem')?.value || S.customRem || '').trim();

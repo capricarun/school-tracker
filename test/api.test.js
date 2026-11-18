@@ -288,3 +288,38 @@ test('a Shortcut that sends the literal word "Text" gets told how to fix it', as
   assert.match(j.message, /sent the word "Text" instead of the message/);
   assert.equal((await call('/api/state', { token: a.body.token })).body.items.length, 0);
 });
+
+test('repeating reminders fire once per occurrence until done or the end date', async () => {
+  const { recurringKey } = await import('../public/shared/reminders.js');
+  const a = await call('/api/family', { method: 'POST', body: { memberName: 'R' } });
+  const tok = a.body.token;
+  const date = new Date(Date.now() + 30 * 864e5).toISOString().slice(0, 10);
+  const { body: { ids: [id] } } = await call('/api/items', { method: 'POST', token: tok, body: { title: 'Reading log', type: 'Assignment', date, rem: [] } });
+  const daily = recurringKey({ freq: 'daily', time: '19:00' });
+  const weekly = recurringKey({ freq: 'weekly', time: '08:00', days: [1] });
+  const pad = (n) => String(n).padStart(2, '0');
+  const in3 = new Date(Date.now() + 3 * 864e5);
+  const until = `${in3.getFullYear()}-${pad(in3.getMonth() + 1)}-${pad(in3.getDate())}`;
+  const limited = recurringKey({ freq: 'daily', time: '06:00', until });
+  assert.equal((await call('/api/items/' + id, { method: 'PATCH', token: tok, body: { rem: [daily, weekly, limited, 'r:hourly@01:00'] } })).status, 200);
+  const it = (await call('/api/state', { token: tok })).body.items.find((i) => i.id === id);
+  assert.deepEqual(it.rem, [daily, weekly, limited]);
+  // backdate creation so earlier occurrences count
+  await db.run('UPDATE items SET created_at = ? WHERE id = ?', [new Date(Date.now() - 20 * 864e5).toISOString(), id]);
+
+  const at = (days, h, m = 1) => { const d = new Date(); d.setDate(d.getDate() + days); d.setHours(h, m, 0, 0); return d; };
+  const mine = async (now) => (await dueReminders(db, now)).filter((x) => x.item.id === id).map((x) => x.key.split('#')[0]);
+  // tomorrow 19:01 → the daily rule is due
+  const t1 = at(1, 19);
+  assert.ok((await mine(t1)).includes(daily));
+  await runTick(db, t1);
+  assert.ok(!(await mine(t1)).includes(daily), 'not twice for the same day');
+  // the next day it fires again
+  assert.ok((await mine(at(2, 19))).includes(daily));
+  // the limited rule stops after its end date
+  assert.ok((await mine(at(2, 6))).includes(limited));
+  assert.ok(!(await mine(at(5, 6))).includes(limited));
+  // done stops everything
+  await call(`/api/items/${id}/done`, { method: 'POST', token: tok, body: { done: true } });
+  assert.deepEqual(await mine(at(3, 19)), []);
+});

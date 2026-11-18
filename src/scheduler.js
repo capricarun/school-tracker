@@ -1,4 +1,4 @@
-import { reminderAt, parseYmd, daysFromToday, MORNING_HOUR } from '../public/shared/reminders.js';
+import { reminderAt, parseYmd, daysFromToday, MORNING_HOUR, isRecurring, lastOccurrence, toYmd } from '../public/shared/reminders.js';
 import { rowToItem, nowIso } from './db.js';
 import { pushToMember, signAction } from './push.js';
 import { config } from './config.js';
@@ -47,10 +47,10 @@ export async function dueReminders(db, now = new Date()) {
   const since = new Date(now.getTime() - 7 * 864e5).toISOString().slice(0, 10);
   const [rows, members, sentRows, children] = await Promise.all([
     // Custom reminders can be set after the item's date, so keep those items too.
-    db.all(`SELECT * FROM items WHERE done = 0 AND (date >= ? OR rem LIKE '%"c:%')`, [since]),
+    db.all(`SELECT * FROM items WHERE done = 0 AND (date >= ? OR rem LIKE '%"c:%' OR rem LIKE '%"r:%')`, [since]),
     db.all('SELECT id, family_id FROM members WHERE notify = 1'),
     db.all(`SELECT s.item_id, s.rem_key, s.member_id FROM sent s JOIN items i ON i.id = s.item_id
-             WHERE i.done = 0 AND (i.date >= ? OR i.rem LIKE '%"c:%')`, [since]),
+             WHERE i.done = 0 AND (i.date >= ? OR i.rem LIKE '%"c:%' OR i.rem LIKE '%"r:%')`, [since]),
     db.all('SELECT * FROM children'),
   ]);
   const byFamily = new Map();
@@ -64,8 +64,12 @@ export async function dueReminders(db, now = new Date()) {
   for (const row of rows) {
     const item = rowToItem(row);
     const created = new Date(item.createdAt);
-    for (const key of item.rem) {
-      const at = reminderAt(item, key);
+    for (const ruleKey of item.rem) {
+      // A repeating rule fires once per occurrence; each one is tracked as "<rule>#<date>".
+      const recurring = isRecurring(ruleKey);
+      const at = recurring ? lastOccurrence(ruleKey, now) : reminderAt(item, ruleKey);
+      const key = recurring && at ? `${ruleKey}#${toYmd(at)}` : ruleKey;
+      if (recurring && at && at < created) continue;
       if (!at || at > now || now - at > graceMs) continue;
       // Don't fire reminders whose time had already passed when the item was added,
       // except the morning-of one for an item added on the day itself.

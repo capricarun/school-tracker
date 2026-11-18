@@ -655,3 +655,17 @@ body.typing .screen { padding-bottom: 24px; }
 @media (max-width: 340px) {
   .grid2.dt.side { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* ---------- repeating reminders ---------- */
+select {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid var(--line-2);
+  border-radius: 12px;
+  padding: 0 10px;
+  font-size: 16px;
+  background: var(--surface);
+  color: var(--ink);
+}
+.day-chip { min-width: 44px; justify-content: center; padding: 0 8px; }
+.repeat-form .chips { gap: 6px; }

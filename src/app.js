@@ -4,7 +4,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { newId, newToken, hashToken, nowIso, rowToItem } from './db.js';
-import { TYPES, defaultReminders, startOfDay, isValidKey, isCustom, MAX_CUSTOM, toYmd, reminderAt } from '../public/shared/reminders.js';
+import { TYPES, defaultReminders, startOfDay, isValidKey, isCustom, MAX_CUSTOM, toYmd, reminderAt, isRecurring, MAX_RECURRING } from '../public/shared/reminders.js';
 import { extractItems, extractFromChat } from './extract.js';
 import { undatedItem } from './parser.js';
 import { pushToMember, vapidPublicKey, verifyAction } from './push.js';
@@ -95,6 +95,7 @@ export function createApp(db) {
     if (!Array.isArray(rem)) rem = defaultReminders(type, time);
     rem = [...new Set(rem.filter((k) => typeof k === 'string' && isValidKey(k)))];
     if (rem.filter(isCustom).length > MAX_CUSTOM) throw bad(`At most ${MAX_CUSTOM} custom reminders per item`);
+    if (rem.filter(isRecurring).length > MAX_RECURRING) throw bad(`At most ${MAX_RECURRING} repeating reminders per item`);
     return {
       type,
       title,

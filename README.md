@@ -8,6 +8,7 @@ School Tracker turns those messages into a shared list for the family and **send
 - **Shared by the family.** Invite your partner or a grandparent with a link. Everyone sees the same list. When one person marks something done, reminders stop for everyone, and the others get a quiet "handled" note.
 - **Share a WhatsApp message (iPhone and Android).** On Android the installed app appears in WhatsApp's Share menu. On iPhone (where web apps can't be share targets) the Family tab sets up an iPhone Shortcut with a personal add-only key: WhatsApp → long-press → Forward → Share → *School Tracker* posts the text to `/api/quick-add`, which extracts the dates, skips duplicates, saves the items and notifies the rest of the family; the Shortcut shows a confirmation.
 - **WhatsApp group import.** Export the school group from WhatsApp (*Export Chat → Without Media*, works on iPhone and Android) and pick the file in the app. It reads the .zip in the browser, skips system/media/chit-chat lines, resolves "tomorrow"/"Friday" against each message's own date, ignores anything already imported and anything in the past, and shows the items for review. On save, everyone else in the family gets a push notification. (WhatsApp has no API for reading personal group chats, so a periodic export is the safe, terms-compliant route.)
+- **Repeating reminders.** Every day, weekdays, or chosen weekdays at a set time — until the item is done, until its date, or until a date you pick (e.g. a reading log every evening, library books every Tuesday morning). Each occurrence is sent once to everyone in the family.
 - **Custom reminders.** Add up to 10 reminders per item at any date and time you choose, on top of the default schedule (also available while reviewing extracted items).
 - **Documents & notes.** Attach photos of circulars, PDFs and Office files (up to 4 MB each; phone photos are shrunk automatically), or paste content as a note, or paste a screenshot. Everyone in the family can open them in the built-in viewer, with Download, Open, Share, Copy and Delete. Files are stored in the database, so this works on Render free + Turso too.
 - **Actionable notifications.** *Mark done* and *Snooze 1 hr* right from the notification.
@@ -111,7 +112,7 @@ Limits to know: free tiers can change; if the monitor misses a ping the app slee
 | GET · DELETE | `/api/attachments/:id` | download / remove (family members only) |
 | POST | `/api/invites` | `{linkDevice?}` → link |
 | POST · PATCH · DELETE | `/api/children[/:id]` | manage children |
-| | | Item `rem` accepts `3d`, `1d`, `am`, `1h` and custom `c:YYYY-MM-DDTHH:MM` |
+| | | Item `rem` accepts `3d`, `1d`, `am`, `1h`, custom `c:YYYY-MM-DDTHH:MM` and repeating `r:daily@HH:MM`, `r:weekdays@HH:MM`, `r:weekly@HH:MM~1,3` (optional `|YYYY-MM-DD` end) |
 | PATCH | `/api/me` | `{name, notify, tellDone}` |
 | POST | `/api/push/subscribe` · `/unsubscribe` · `/test` | Web Push |
 | POST | `/api/push-action` | *(HMAC-signed)* notification buttons |
