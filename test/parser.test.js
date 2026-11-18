@@ -112,3 +112,18 @@ test('undated message still yields an item title', () => {
   assert.equal(it.title, 'Ensure children carry their library books');
   assert.equal(it.type, 'Task'); // "carry" is something parents must do
 });
+
+test('Neverskip lunch menu message', () => {
+  const msg = `Dear  Parent
+
+Kindly find the attachment.
+
+ LUNCH MENU- Kindly find the attached menu for Saturday (14th November). https://forms.cloud.microsoft/r/dWWshHQQXv
+
+--
+Regards
+ Campus K School
+Powered by Neverskip`;
+  const items = parseMessage(msg, { children, today });
+  assert.deepEqual(items.map((i) => [i.title, i.date]), [['Lunch menu', '2026-11-14']]);
+});

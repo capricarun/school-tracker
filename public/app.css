@@ -522,3 +522,39 @@ body.typing .screen { padding-bottom: 24px; }
 .steps code, .howto code { font-size: 13px; background: var(--sunk); padding: 1px 5px; border-radius: 4px; }
 .share-row { padding: 12px 0; border-top: 1px solid var(--line); }
 .share-row:first-of-type { border-top: none; padding-top: 0; }
+
+/* ---------- card actions: Done (left) · View (right) ---------- */
+.item { flex-direction: column; align-items: stretch; gap: 0; padding: 4px 16px 12px; }
+.item.done { align-items: stretch; }
+.item .item-body { padding: 12px 0 10px; }
+.card-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+}
+.card-actions .btn.small { min-height: 40px; padding: 0 16px; border-radius: 20px; }
+.card-done svg { margin-right: -2px; }
+.card-view {
+  margin-left: auto;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--accent);
+  text-decoration: none;
+}
+.card-view:active { opacity: 0.6; }
+.item.done .card-actions { border-top-color: var(--line-2); }
+
+/* ---------- long attachment / link names wrap inside the card ---------- */
+.att { align-items: flex-start; }
+.att-thumb { margin-top: 2px; }
+.att-text { min-width: 0; text-align: left; display: flex; flex-direction: column; gap: 2px; }
+.att-text b { display: block; white-space: normal; overflow-wrap: anywhere; word-break: break-word; line-height: 1.35; }
+.att-text .small { display: block; white-space: normal; overflow-wrap: anywhere; }

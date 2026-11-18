@@ -103,6 +103,12 @@ export function findChild(s, children) {
 }
 
 export function cleanTitle(line, cuts) {
+  // "LUNCH MENU- Kindly find the attached menu…" → the capitalised heading is the best title.
+  const head = /^\s*([A-Z][A-Z0-9&'’ ]{2,40}?)\s*[-–:]\s+\S/.exec(line);
+  if (head && /[A-Z]{2}/.test(head[1]) && head[1].trim().split(/\s+/).length <= 6) {
+    const h = head[1].trim().toLowerCase();
+    return h.charAt(0).toUpperCase() + h.slice(1);
+  }
   let t = line;
   for (const c of cuts) if (c) t = t.replace(c, ' ');
   for (let i = 0; i < 2; i++) {
@@ -120,6 +126,8 @@ export function cleanTitle(line, cuts) {
     .replace(/[\s,.;:!\-–]+$/, '')
     .replace(/\s{2,}/g, ' ')
     .trim();
+  t = t.replace(/\b(kindly|please)\s+(find|see|check)\s+(the\s+)?(attached|attachment|enclosed)(\s+(file|document|circular|image))?\b/gi, ' ')
+    .replace(/\(\s*\)/g, ' ');
   t = t.replace(/https?:\/\/\S+/gi, ' ').replace(/\b(register|click|visit|link|details)( here)?\s*[:\-]?\s*$/i, '').replace(/[\s,.;:!\-–]+$/, '').trim();
   t = t.replace(/^ptm\b/i, 'Parent–Teacher Meeting (PTM)');
   if (!t) t = 'School item';

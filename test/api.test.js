@@ -278,3 +278,13 @@ test('share log records what each Shortcut share delivered', async () => {
   assert.match(log[0].message, /^Already in School Tracker: "Bring the craft kit"/);
   assert.equal(log[0].matchedTitle, 'Bring the craft kit');
 });
+
+test('a Shortcut that sends the literal word "Text" gets told how to fix it', async () => {
+  const a = await call('/api/family', { method: 'POST', body: { memberName: 'W' } });
+  const key = (await call('/api/shortcut-key', { method: 'POST', token: a.body.token })).body.key;
+  const r = await fetch(`${base}/api/quick-add`, { method: 'POST', headers: { authorization: 'Bearer ' + key, 'content-type': 'application/x-www-form-urlencoded' }, body: 'Text=Text' });
+  const j = await r.json();
+  assert.equal(j.added, 0);
+  assert.match(j.message, /sent the word "Text" instead of the message/);
+  assert.equal((await call('/api/state', { token: a.body.token })).body.items.length, 0);
+});

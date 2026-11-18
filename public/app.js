@@ -48,6 +48,8 @@ const ICON = {
   pin: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s-7-6.2-7-11a7 7 0 1 1 14 0c0 4.8-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg>',
   msg: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
   link: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>',
+  chev: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>',
+  checkSm: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5L20 7"/></svg>',
   clip: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.4 11.1l-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg>',
   file: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></svg>',
   note: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 4h8M6 4h12a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/><path d="M8 10h8M8 14h8M8 18h5"/></svg>',
@@ -248,13 +250,22 @@ function itemCard(it) {
   const k = kidOf(it.childId);
   const dd = daysFromToday(it.date);
   const d = parseYmd(it.date);
+  const links = urlsIn(it.msg).length;
+  const files = it.attachments?.length || 0;
+  const extras = links || files
+    ? `<span class="row" style="gap:8px">${links ? `<span class="row" style="gap:3px" aria-label="${links} link${links > 1 ? 's' : ''}">${ICON.link}${links}</span>` : ''}${files ? `<span class="row" style="gap:3px" aria-label="${files} attachment${files > 1 ? 's' : ''}">${ICON.clip}${files}</span>` : ''}</span>`
+    : '';
+  const viewLink = `<a class="card-view" href="#item/${it.id}" aria-label="View ${esc(it.title)}">View ${ICON.chev}</a>`;
   if (it.done) {
-    return `<div class="item done">
-      <button class="check" data-act="toggle-done" data-id="${it.id}" aria-label="Mark not done: ${esc(it.title)}"><span>${ICON.check}</span></button>
+    return `<article class="item done">
       <button class="item-body" data-act="open" data-id="${it.id}">
         <span class="item-title">${esc(it.title)}</span>
         <span class="small">${k ? esc(k.name) + ' · ' : ''}done by ${esc(it.doneBy || 'someone')}</span>
-      </button></div>`;
+      </button>
+      <div class="card-actions">
+        <button class="btn small" data-act="toggle-done" data-id="${it.id}" aria-label="Mark not done: ${esc(it.title)}">Undo</button>
+        ${viewLink}
+      </div></article>`;
   }
   const up = upcomingReminders(it);
   const whenCls = dd < 0 ? 'overdue' : dd === 0 ? 'today' : '';
@@ -262,8 +273,7 @@ function itemCard(it) {
     ? 'No date given · tap to set one'
     : (dd < 0 ? 'Overdue · ' : '') + dayLabel(d) + (it.time ? ' · ' + fmtTime(it.time) : '');
   const next = up.length ? `Next reminder ${dayLabel(up[0])}, ${fmtClock(up[0])}` : dd <= 0 ? 'Due today — no more reminders' : 'No reminders on';
-  return `<div class="item">
-    <button class="check" data-act="toggle-done" data-id="${it.id}" aria-label="Mark done: ${esc(it.title)}"><span></span></button>
+  return `<article class="item">
     <button class="item-body" data-act="open" data-id="${it.id}">
       <span class="row wrap" style="gap:8px">
         <span class="tag t-${it.type}">${it.type}</span>
@@ -271,8 +281,13 @@ function itemCard(it) {
       </span>
       <span class="item-title">${esc(it.title)}</span>
       <span class="when ${whenCls}">${esc(when)}</span>
-      <span class="next">${ICON.bellSm}${esc(next)}${it.attachments?.length || urlsIn(it.msg).length ? `<span class="row" style="gap:8px;margin-left:auto">${urlsIn(it.msg).length ? `<span class="row" style="gap:3px">${ICON.link}${urlsIn(it.msg).length}</span>` : ''}${it.attachments?.length ? `<span class="row" style="gap:3px">${ICON.clip}${it.attachments.length}</span>` : ''}</span>` : ''}</span>
-    </button></div>`;
+      <span class="next">${ICON.bellSm}${esc(next)}</span>
+    </button>
+    <div class="card-actions">
+      <button class="btn small primary card-done" data-act="toggle-done" data-id="${it.id}" aria-label="Mark done: ${esc(it.title)}">${ICON.checkSm} Done</button>
+      ${extras}
+      ${viewLink}
+    </div></article>`;
 }
 
 function pushBanner() {
@@ -419,7 +434,7 @@ function attachmentsSection(it) {
       const sub = a.kind === 'note' ? esc((a.text || '').slice(0, 60)) : `${esc(isPdf(a) ? 'PDF' : (a.type.split('/')[1] || 'file').toUpperCase())} · ${fmtSize(a.size)}`;
       return `<button class="att" data-act="open-att" data-id="${a.id}">
         <span class="att-thumb">${thumb}</span>
-        <span class="grow" style="text-align:left;min-width:0"><b class="ellipsis">${esc(a.name)}</b><span class="small ellipsis" style="display:block">${sub}</span></span></button>`;
+        <span class="grow att-text"><b>${esc(a.name)}</b><span class="small">${sub}</span></span></button>`;
     }).join('')}</div>` : ''}
     ${S.noteDraft !== null ? `<div class="stack" style="gap:8px">
       <label for="note-text">Paste or type the content</label>
@@ -565,7 +580,7 @@ function itemScreen() {
     ${urlsIn(it.msg).length ? `<section class="card stack" style="gap:10px"><h2>Links in the message</h2>
       ${urlsIn(it.msg).map((u) => `<a class="att" href="${esc(u)}" target="_blank" rel="noopener noreferrer" style="text-decoration:none;color:inherit">
         <span class="att-thumb">${ICON.link}</span>
-        <span class="grow" style="min-width:0"><b class="ellipsis" style="display:block">${esc(linkLabel(u))}</b><span class="small">Opens in your browser</span></span></a>`).join('')}
+        <span class="grow att-text"><b>${esc(linkLabel(u))}</b><span class="small">Opens in your browser</span></span></a>`).join('')}
     </section>` : ''}
     ${attachmentsSection(it)}
     <div class="row wrap actions">
@@ -656,8 +671,9 @@ function shareCard() {
         <li>Add the action <b>Get Contents of URL</b>. Paste value 1 as the URL. Tap the arrow to show more:
           <ul><li><b>Method</b>: POST</li>
           <li><b>Headers</b> → Add new header: key <code>Authorization</code>, text: paste value 2</li>
-          <li><b>Request Body</b>: <b>Form</b> → Add new field → <b>Text</b> → key <code>text</code>, value: <b>Text</b> (from step 3)</li>
-          <li>Add new field → <b>File</b> → key <code>photo</code>, value: <b>Images</b> (from step 4)</li></ul></li>
+          <li><b>Request Body</b>: <b>Form</b> → Add new field → <b>Text</b> → key <code>text</code>. For the value, <b>don't type anything</b>: tap the value box, then tap <b>Select Variable</b> (or the suggestion bar above the keyboard) and pick the blue <b>Text</b> bubble from step 3.</li>
+          <li>Add new field → <b>File</b> → key <code>photo</code> → tap the value and pick the blue <b>Images</b> bubble from step 4.</li></ul>
+          <span class="small">Values must show as <b>blue bubbles</b>. If you see plain grey words, they were typed and the app will receive the word itself.</span></li>
         <li>Add the action <b>Get Dictionary Value</b> → Get <b>Value</b> for key <code>message</code> in <b>Contents of URL</b>.</li>
         <li>Add the action <b>Show Notification</b> → tap the text and choose <b>Dictionary Value</b>. Tap <b>Done</b>.</li>
       </ol>

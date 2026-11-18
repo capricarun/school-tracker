@@ -793,6 +793,12 @@ export function createApp(db) {
         : typeof b?.text === 'string' ? b.text
           : Object.values(b || {}).find((v) => typeof v === 'string' && v.trim().length > 3);
       const text = typeof raw === 'string' ? raw.trim().slice(0, 6000) : '';
+      // The Shortcut sent a field's label instead of the shared content (value typed, not picked as a variable).
+      if (!files.length && /^(text|shortcut input|images?|input|file|photo|contents of url)$/i.test(text)) {
+        const msg = `The Shortcut sent the word "${text}" instead of the message. In the Shortcut, tap the value of the text field, delete it, and pick the blue "Text" variable from Get Text from Input. Do the same for photo with "Images".`;
+        await logShare(req, { text, message: msg });
+        return res.json({ ok: false, added: 0, message: msg });
+      }
       if (!text && !files.length) {
         const parts = Object.keys(req.body || {}).concat((req.files || []).map((f) => f.fieldname));
         console.warn(`[quick-add] empty share from ${req.member.name}: content-type=${req.get('content-type')}, fields=[${parts.join(',')}]`);
