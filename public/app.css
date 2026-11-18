@@ -629,3 +629,29 @@ body.typing .screen { padding-bottom: 24px; }
 .card-delete.confirm { background: var(--danger-soft); color: var(--danger); }
 .card-actions .card-done { background: var(--surface); color: var(--ink); border: 1px solid var(--line-2); }
 .card-actions .card-done svg { color: var(--accent); }
+
+/* ---------- card top-right: link/attachment counts, then delete ---------- */
+.card-tools {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.card-tools > .row { padding: 0 6px; }
+.card-tools .card-delete { position: static; }
+.item .item-body { padding-right: 0; }
+.item .item-body > .row:first-child { padding-right: 112px; min-height: 28px; }
+.item .done-body { padding-right: 96px; }
+
+/* ---------- detail page: Date and Time side by side ---------- */
+@media (max-width: 440px) {
+  .grid2.dt.side { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .grid2.dt.side input { padding-left: 10px; padding-right: 6px; font-size: 16px; }
+}
+@media (max-width: 340px) {
+  .grid2.dt.side { grid-template-columns: minmax(0, 1fr); }
+}

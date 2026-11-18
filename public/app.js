@@ -283,8 +283,8 @@ function itemCard(it) {
   const confirming = S.cardDelete === it.id;
   const del = `<button class="card-delete ${confirming ? 'confirm' : ''}" data-act="card-delete" data-id="${it.id}" aria-label="${confirming ? 'Tap again to delete' : 'Delete'} ${esc(it.title)}">${ICON.trash}${confirming ? 'Delete?' : ''}</button>`;
   if (it.done) {
-    return `<article class="item done">${del}
-      <button class="item-body" data-act="open" data-id="${it.id}">
+    return `<article class="item done"><div class="card-tools">${extras}${del}</div>
+      <button class="item-body done-body" data-act="open" data-id="${it.id}">
         <span class="item-title">${esc(it.title)}</span>
         <span class="small">${k ? esc(k.name) + ' · ' : ''}done by ${esc(it.doneBy || 'someone')}</span>
       </button>
@@ -299,7 +299,7 @@ function itemCard(it) {
     ? 'No date given · tap to set one'
     : (dd < 0 ? 'Overdue · ' : '') + dayLabel(d) + (it.time ? ' · ' + fmtTime(it.time) : '');
   const next = up.length ? `Next reminder ${dayLabel(up[0])}, ${fmtClock(up[0])}` : dd <= 0 ? 'Due today — no more reminders' : 'No reminders on';
-  return `<article class="item">${del}
+  return `<article class="item"><div class="card-tools">${extras}${del}</div>
     <button class="item-body" data-act="open" data-id="${it.id}">
       <span class="row wrap" style="gap:8px">
         <span class="tag t-${it.type}">${it.type}</span>
@@ -311,7 +311,6 @@ function itemCard(it) {
     </button>
     <div class="card-actions">
       <button class="btn small card-done" data-act="toggle-done" data-id="${it.id}" aria-label="Mark as done: ${esc(it.title)}">${ICON.checkSm} Mark as done</button>
-      ${extras}
       ${viewLink}
     </div></article>`;
 }
@@ -588,7 +587,7 @@ function itemScreen() {
     ${S.data.children.length ? `<div class="field"><span class="label">For</span><div class="chips" role="group" aria-label="Child">${S.data.children
       .map((c) => `<button class="chip sm" data-act="item-set" data-k="childId" data-v="${c.id}" aria-pressed="${it.childId === c.id}">${esc(c.name)}</button>`)
       .join('')}</div></div>` : ''}
-    <div class="grid2 dt">
+    <div class="grid2 dt side">
       <div class="field"><label for="it-date">Date</label><input type="date" id="it-date" data-save="date" value="${esc(it.date)}"></div>
       <div class="field"><label for="it-time">Time</label><input type="time" id="it-time" data-save="time" value="${esc(it.time)}"></div>
     </div>
