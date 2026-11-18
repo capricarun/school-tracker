@@ -15,10 +15,12 @@
   --warn: #8a3b0a;
   --radius: 18px;
   --nav-h: 76px;
+  --danger-soft: #fde7df;
   color-scheme: light;
 }
+/* Dark theme: follows the phone unless the person picked Light or Dark in the app. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme='light']) {
     --ground: #151513;
     --surface: #1f1e1b;
     --sunk: #262521;
@@ -33,9 +35,29 @@
     --accent-soft-ink: #a9e3d7;
     --danger: #f08a6c;
     --warn: #f0b27a;
+    --danger-soft: #3a1f17;
     color-scheme: dark;
   }
 }
+:root[data-theme='dark'] {
+    --ground: #151513;
+    --surface: #1f1e1b;
+    --sunk: #262521;
+    --ink: #f2efe8;
+    --ink-2: #d9d5cc;
+    --muted: #a8a397;
+    --line: #34322d;
+    --line-2: #4a4740;
+    --accent: #3fb8a3;
+    --accent-ink: #0b1f1b;
+    --accent-soft: #17302b;
+    --accent-soft-ink: #a9e3d7;
+    --danger: #f08a6c;
+    --warn: #f0b27a;
+    --danger-soft: #3a1f17;
+    color-scheme: dark;
+}
+:root[data-theme='light'] { color-scheme: light; }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
 body {
@@ -558,3 +580,52 @@ body.typing .screen { padding-bottom: 24px; }
 .att-text { min-width: 0; text-align: left; display: flex; flex-direction: column; gap: 2px; }
 .att-text b { display: block; white-space: normal; overflow-wrap: anywhere; word-break: break-word; line-height: 1.35; }
 .att-text .small { display: block; white-space: normal; overflow-wrap: anywhere; }
+
+/* ---------- header tools (theme switch) ---------- */
+.page-tools { display: flex; gap: 8px; flex: none; }
+.theme-switch {
+  display: inline-flex;
+  padding: 3px;
+  border-radius: 22px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+.theme-switch button {
+  width: 38px;
+  height: 36px;
+  border-radius: 18px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+.theme-switch button[aria-pressed='true'] { background: var(--ink); color: var(--ground); }
+
+/* ---------- card: delete icon top-right, secondary "Mark as done" ---------- */
+.item { position: relative; }
+.item .item-body { padding-right: 44px; }
+.card-delete {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  min-width: 44px;
+  height: 44px;
+  border-radius: 22px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.card-delete:hover { color: var(--danger); }
+.card-delete.confirm { background: var(--danger-soft); color: var(--danger); }
+.card-actions .card-done { background: var(--surface); color: var(--ink); border: 1px solid var(--line-2); }
+.card-actions .card-done svg { color: var(--accent); }

@@ -50,12 +50,35 @@ const ICON = {
   link: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>',
   chev: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>',
   checkSm: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5L20 7"/></svg>',
+  trash: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12"/><path d="M9 7V4h6v3"/></svg>',
+  sun: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>',
+  moon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg>',
   clip: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.4 11.1l-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg>',
   file: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></svg>',
   note: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 4h8M6 4h12a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/><path d="M8 10h8M8 14h8M8 18h5"/></svg>',
   close: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>',
   share: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M7 8l5-5 5 5"/><path d="M5 13v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6"/></svg>',
 };
+
+/* ---------------- theme ---------------- */
+const THEME_KEY = 'st_theme';
+const systemTheme = () => (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+function currentTheme() {
+  const t = store.get(THEME_KEY);
+  return t === 'light' || t === 'dark' ? t : systemTheme();
+}
+function applyTheme(t) {
+  document.documentElement.dataset.theme = t;
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', t === 'dark' ? '#151513' : '#F6F4EF');
+}
+applyTheme(currentTheme());
+function themeSwitch() {
+  const t = currentTheme();
+  return `<div class="theme-switch" role="group" aria-label="Colour theme">
+    <button data-act="theme" data-id="light" aria-pressed="${t === 'light'}" aria-label="Light theme">${ICON.sun}</button>
+    <button data-act="theme" data-id="dark" aria-pressed="${t === 'dark'}" aria-label="Dark theme">${ICON.moon}</button>
+  </div>`;
+}
 
 /* ---------------- state ---------------- */
 const S = {
@@ -156,6 +179,7 @@ function setToken(t) {
   store.set(TOKEN_KEY, t);
 }
 let toastTimer;
+let cardDeleteTimer;
 function toast(msg) {
   S.toast = msg;
   render();
@@ -256,8 +280,10 @@ function itemCard(it) {
     ? `<span class="row" style="gap:8px">${links ? `<span class="row" style="gap:3px" aria-label="${links} link${links > 1 ? 's' : ''}">${ICON.link}${links}</span>` : ''}${files ? `<span class="row" style="gap:3px" aria-label="${files} attachment${files > 1 ? 's' : ''}">${ICON.clip}${files}</span>` : ''}</span>`
     : '';
   const viewLink = `<a class="card-view" href="#item/${it.id}" aria-label="View ${esc(it.title)}">View ${ICON.chev}</a>`;
+  const confirming = S.cardDelete === it.id;
+  const del = `<button class="card-delete ${confirming ? 'confirm' : ''}" data-act="card-delete" data-id="${it.id}" aria-label="${confirming ? 'Tap again to delete' : 'Delete'} ${esc(it.title)}">${ICON.trash}${confirming ? 'Delete?' : ''}</button>`;
   if (it.done) {
-    return `<article class="item done">
+    return `<article class="item done">${del}
       <button class="item-body" data-act="open" data-id="${it.id}">
         <span class="item-title">${esc(it.title)}</span>
         <span class="small">${k ? esc(k.name) + ' · ' : ''}done by ${esc(it.doneBy || 'someone')}</span>
@@ -273,7 +299,7 @@ function itemCard(it) {
     ? 'No date given · tap to set one'
     : (dd < 0 ? 'Overdue · ' : '') + dayLabel(d) + (it.time ? ' · ' + fmtTime(it.time) : '');
   const next = up.length ? `Next reminder ${dayLabel(up[0])}, ${fmtClock(up[0])}` : dd <= 0 ? 'Due today — no more reminders' : 'No reminders on';
-  return `<article class="item">
+  return `<article class="item">${del}
     <button class="item-body" data-act="open" data-id="${it.id}">
       <span class="row wrap" style="gap:8px">
         <span class="tag t-${it.type}">${it.type}</span>
@@ -284,7 +310,7 @@ function itemCard(it) {
       <span class="next">${ICON.bellSm}${esc(next)}</span>
     </button>
     <div class="card-actions">
-      <button class="btn small primary card-done" data-act="toggle-done" data-id="${it.id}" aria-label="Mark done: ${esc(it.title)}">${ICON.checkSm} Done</button>
+      <button class="btn small card-done" data-act="toggle-done" data-id="${it.id}" aria-label="Mark as done: ${esc(it.title)}">${ICON.checkSm} Mark as done</button>
       ${extras}
       ${viewLink}
     </div></article>`;
@@ -339,7 +365,9 @@ function homeScreen() {
         <p class="small" style="margin:0;font-weight:500">${WDL[now.getDay()]}, ${now.getDate()} ${MON[now.getMonth()]}</p>
         <h1 style="margin-top:6px">${esc(headline)}</h1>
       </div>
-      ${S.push === 'on' ? `<button class="icon-btn" data-act="test-push" aria-label="Send me a test reminder">${ICON.bell}</button>` : ''}
+      <div class="page-tools">
+        ${themeSwitch()}
+      </div>
     </header>
     ${pushBanner()}
     <div class="grid3">
@@ -717,7 +745,8 @@ function familyScreen() {
   const inv = S.invite;
   const pushLine = { on: 'On for this device', default: 'Off for this device', denied: 'Blocked in browser settings', 'ios-install': 'Add to Home Screen first', unsupported: 'Not supported in this browser', checking: '…' }[S.push];
   return `<main class="screen">
-    <div><h1>${esc(family.name)}</h1>
+    <header class="row between" style="align-items:flex-start"><h1>${esc(family.name)}</h1><div class="page-tools">${themeSwitch()}</div></header>
+    <div>
       <p class="sub" style="margin-top:8px">Everyone here sees the same list. When one of you marks something done, the others stop getting reminders for it.</p></div>
 
     <section class="card list">
@@ -981,6 +1010,31 @@ const actions = {
   filter: (el) => { S.filter = el.dataset.id; render(); },
   'toggle-show-done': () => { S.showDone = !S.showDone; render(); },
   'enable-push': enablePush,
+  theme(el) {
+    store.set(THEME_KEY, el.dataset.id);
+    applyTheme(el.dataset.id);
+    render();
+  },
+  async 'card-delete'(el) {
+    const id = el.dataset.id;
+    if (S.cardDelete !== id) {
+      // First tap arms it; a second tap within 4 seconds deletes.
+      S.cardDelete = id;
+      render();
+      clearTimeout(cardDeleteTimer);
+      cardDeleteTimer = setTimeout(() => { if (S.cardDelete === id) { S.cardDelete = null; render(); } }, 4000);
+      return;
+    }
+    S.cardDelete = null;
+    const it = itemOf(id);
+    if (S.data) S.data.items = S.data.items.filter((x) => x.id !== id);
+    render();
+    try {
+      await api('/api/items/' + id, { method: 'DELETE' });
+      toast(`Deleted “${it?.title || 'item'}” for everyone`);
+    } catch (e) { toast(e.message); }
+    refresh();
+  },
   async 'load-shares'() {
     try { S.shares = await api('/api/shares'); } catch (e) { toast(e.message); }
     render();
@@ -1337,6 +1391,7 @@ navigator.serviceWorker?.addEventListener('message', (e) => { if (e.data?.type =
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refresh(); });
 setInterval(() => { if (document.visibilityState === 'visible') refresh(); }, 60000);
 window.addEventListener('hashchange', onRoute);
+matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => { if (!store.get(THEME_KEY)) { applyTheme(systemTheme()); render(); } });
 
 /* ---------------- boot ---------------- */
 (async function boot() {
